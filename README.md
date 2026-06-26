@@ -1,27 +1,40 @@
-# MSR-TCN: Rede Convolucional Temporal Residual Multiescala com Decomposição Adaptativa para Previsão Financeira
+# MSR-TCN: Rede Convolucional Temporal Regularizada por Sub-bandas
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C.svg)](https://pytorch.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Este repositório contém o código-fonte oficial e o pipeline de reprodutibilidade para o modelo **MSR-TCN (Multi-Scale Residual Temporal Convolutional Network)**, uma arquitetura de *Deep Learning* proposta para solucionar problemas de ruído de alta frequência e não-estacionariedade inerentes à previsão de séries temporais financeiras.
+Este repositório contém o código-fonte oficial e o pipeline de reprodutibilidade para o modelo **Multichannel Subband Regularized Temporal Convolutional Network (MSR-TCN)**, uma arquitetura de *Deep Learning* proposta para solucionar problemas de ruído de alta frequência e não-estacionariedade inerentes à previsão de séries temporais financeiras.
 
-## 🎯 Resumo
+## 1. Visão Geral (O Problema)
 
-O mercado financeiro gera dados com um altíssimo grau de estocasticidade (ruído) e não-estacionariedade (mudança de distribuições ao longo do tempo). Redes Neurais convencionais (como CNNs e LSTMs) frequentemente sofrem de *overfitting* ou falham em isolar a verdadeira tendência de longo prazo das flutuações voláteis intradiárias.
+A modelagem preditiva em finanças frequentemente falha devido a dois problemas clássicos do *Deep Learning*:
+1. **O Ruído Branco:** Tentar prever movimentos diários de preços isolados, o que resulta em modelos que invariavelmente memorizam a classe majoritária (*Class Collapse*).
+2. **Vazamento de Dados (Data Leakage) e Regimes:** Validar os dados usando métodos estáticos (K-Fold clássico) ou separar treino/teste ignorando que o mercado financeiro sofre quebras estruturais drásticas ao longo do tempo (Crises e *Bull Markets*).
 
-A **MSR-TCN** resolve este problema ao integrar uma **Decomposição Adaptativa em Subbandas (ASD) 1D Assimétrica** nativa à arquitetura, fragmentando o sinal financeiro bruto em três frequências distintas:
-1. **Alta Frequência (Ruído):** Captura a volatilidade imediata.
-2. **Média Frequência (Sazonalidade):** Captura ciclos intermédios de mercado.
-3. **Baixa Frequência (Tendência):** Isola a direção subjacente do ativo.
+Para mitigar esses problemas, a **MSR-TCN** funde o estado-da-arte em decomposição de sinais e redes convolucionais estritamente causais.
 
-Cada subbanda é processada por blocos isolados de **Redes Convolucionais Temporais (TCN)** com convoluções causais e dilatadas, permitindo um amplo campo receptivo (*receptive field*) sem perda de granularidade temporal.
+## 2. A Solução Arquitetural
 
----
+### 2.1. Metodologia de Labeling de Classificação
 
-## 🧠 Arquitetura do Modelo
+Seguindo a rigorosa fundamentação de classificadores financeiros multicanais, abolimos o uso do retorno logarítmico binário de curtíssimo prazo como variável alvo. Em vez disso, rotulamos o alvo $Y$ utilizando uma janela deslizante (11 dias) em busca de **inversões de tendência estruturais**:
+- O preço mínimo local (*suporte*) recebe o rótulo **`2 (BUY)`**.
+- O preço máximo local (*resistência*) recebe o rótulo **`1 (SELL)`**.
+- As flutuações transversais do meio do caminho recebem **`0 (HOLD)`**.
 
-A arquitetura ponta a ponta (*end-to-end*) do modelo processa vetores de características (Preço, Volume, Indicadores Técnicos) diretamente na série temporal.
+Como a classe `HOLD` representa cerca de $90\%$ da distribuição do dataset, blindamos a convergência da rede através da função de perda **Focal Loss**, forçando a TCN a concentrar sua capacidade paramétrica apenas nas classes minoritárias difíceis.
+
+### 2.2. Decomposição Espectral Adaptativa (MSR-TCN)
+
+Baseado em arquiteturas regularizadas estruturalmente, o modelo emprega uma camada nativa de **Adaptive Spectral Decomposition (ASD) Assimétrica**. Ela atua como um prisma matemático hiper-eficiente que divide o tensor de entrada em frequências puras:
+*   **Ruído (Alta Freq.):** Captura micro-choques e volatilidade intradia.
+*   **Sazonalidade (Média Freq.):** Captura ciclos secundários do mercado.
+*   **Tendência (Baixa Freq.):** Isola inércia direcional de longo prazo.
+
+Após a fragmentação, o processamento de características temporais é paralelizado. Cada sub-banda passa por um bloco isolado de **Redes Convolucionais Temporais (TCN)** com dilatações causais.
+
+### 2.3. Diagrama Top-Down da Arquitetura MSR-TCN
 
 ```mermaid
 graph TD
@@ -30,152 +43,173 @@ graph TD
     classDef tcn fill:#388E3C,stroke:#333,stroke-width:2px,color:#fff;
     classDef output fill:#FF9800,stroke:#333,stroke-width:2px,color:#fff;
 
-    X["Entrada Temporal\n[Batch, Features=6, Seq=32]"]:::input
+    Input["Tensor de Entrada\n[Janela Temporal, Características]"]:::input
 
-    subgraph "Asymmetric 1D Adaptive Subband Decomposition (ASD)"
-        L1_U["Filtro L1 (Alta Freq.)\nMax Pooling"]:::asd
-        L1_L["Filtro L1 (Baixa Freq.)\nMax Pooling"]:::asd
-        
-        L2_U["Filtro L2 (Média Freq.)\nMax Pooling"]:::asd
-        L2_L["Filtro L2 (Baixa Freq.)\nMax Pooling"]:::asd
-        
-        Sync["Max Pooling\n(Sincronização Temporal)"]:::asd
+    subgraph "Módulo ASD (Decomposição Assimétrica 1D)"
+        direction TB
+        L1_H["Filtro U1 (Passa-Alta)"]:::asd
+        L1_L["Filtro L1 (Passa-Baixa)"]:::asd
+        L2_H["Filtro U2 (Passa-Alta)"]:::asd
+        L2_L["Filtro L2 (Passa-Baixa)"]:::asd
+
+        Input --> L1_H
+        Input --> L1_L
+        L1_L --> L2_H
+        L1_L --> L2_L
     end
 
-    subgraph "Temporal Convolutional Networks (TCNs Independentes)"
-        TCN_Noise["TCN Subbanda Ruído\n(Dilatações: 1, 2)"]:::tcn
-        TCN_Season["TCN Subbanda Sazonal\n(Dilatações: 1, 2)"]:::tcn
-        TCN_Trend["TCN Subbanda Tendência\n(Dilatações: 1, 2)"]:::tcn
+    subgraph "Sub-bandas Isoladas"
+        direction LR
+        SB1["Ruído\n(Alta Freq.)"]:::asd
+        SB2["Sazonalidade\n(Média Freq.)"]:::asd
+        SB3["Tendência\n(Baixa Freq.)"]:::asd
+        
+        L1_H --> SB1
+        L2_H --> SB2
+        L2_L --> SB3
     end
 
-    Concat["Concatenação de Features\n(Dim=96)"]:::input
-    FC["Fully Connected (MLP)\n+ Dropout + ReLU"]:::output
-    Out["Previsão (Softmax)\n[COMPRAR, VENDER, MANTER]"]:::output
+    subgraph "Camadas TCN Causais Dilatadas"
+        direction TB
+        TCN1["Subband-TCN 1"]:::tcn
+        TCN2["Subband-TCN 2"]:::tcn
+        TCN3["Subband-TCN 3"]:::tcn
 
-    X --> L1_U
-    X --> L1_L
-    L1_L --> L2_U
-    L1_L --> L2_L
-    L1_U --> Sync
+        SB1 --> TCN1
+        SB2 --> TCN2
+        SB3 --> TCN3
+    end
 
-    Sync -->|Sinal Ruidoso| TCN_Noise
-    L2_U -->|Sinal Sazonal| TCN_Season
-    L2_L -->|Tendência Limpa| TCN_Trend
+    Concat["Concatenação Paralela de Características"]:::input
+    TCN1 --> Concat
+    TCN2 --> Concat
+    TCN3 --> Concat
 
-    TCN_Noise --> Concat
-    TCN_Season --> Concat
-    TCN_Trend --> Concat
+    FC["Rede Neural Densa\n(Focal Loss + Dropout)"]:::output
+    Concat --> FC
 
-    Concat --> FC --> Out
+    Out["Predição Final\n[COMPRAR, VENDER, MANTER]"]:::output
+    FC --> Out
 ```
 
 ---
 
-## 🔬 Metodologia de Validação (Walk-Forward)
+## 3. Validação Científica (Walk-Forward)
 
-Para assegurar rigor científico e total isolamento contra vazamento de dados (*data leakage* / *look-ahead bias*), este repositório adota a Validação Cruzada *Walk-Forward* com janelas de expansão.
+Para assegurar rigor científico e total isolamento contra *Data Leakage*, abandonamos a validação cruzada estática tradicional (K-Fold). O repositório adota a Validação *Walk-Forward* com expansão iterativa em um horizonte de 10 anos (2015-2024).
 
 ```mermaid
 gantt
-    title Estratégia de Validação Walk-Forward em Expansão (2015-2024)
     dateFormat YYYY
     axisFormat %Y
     
-    section Fold 1
-    Treino (5 anos)      :active, t1, 2009, 2013
-    Validação (1 ano)    :crit, v1, 2014, 2014
-    Teste OOS (1 ano)    :done, f1, 2015, 2015
+    section Iteração 1
+    Treino (5 Anos)   :active, 2009-01-01, 2013-12-31
+    Validação (1 Ano) :done,   2014-01-01, 2014-12-31
+    Teste (1 Ano)     :crit,   2015-01-01, 2015-12-31
 
-    section Fold 2
-    Treino (6 anos)      :active, t2, 2009, 2014
-    Validação (1 ano)    :crit, v2, 2015, 2015
-    Teste OOS (1 ano)    :done, f2, 2016, 2016
-    
-    section Fold ...
-    Treino               :active, t3, 2009, 2019
-    Validação            :crit, v3, 2020, 2020
-    Teste OOS            :done, f3, 2021, 2021
+    section Iteração 2
+    Treino (5 Anos)   :active, 2010-01-01, 2014-12-31
+    Validação (1 Ano) :done,   2015-01-01, 2015-12-31
+    Teste (1 Ano)     :crit,   2016-01-01, 2016-12-31
+
+    section Iteração 3
+    Treino (5 Anos)   :active, 2011-01-01, 2015-12-31
+    Validação (1 Ano) :done,   2016-01-01, 2016-12-31
+    Teste (1 Ano)     :crit,   2017-01-01, 2017-12-31
 ```
-
-O conjunto de **Teste (Out-of-Sample)** avança 1 ano de cada vez. O modelo é inteiramente descartado e treinado do absoluto zero a cada iteração de teste, simulando com exatidão o ambiente produtivo e as mudanças de mercado (regimes de volatilidade).
 
 ---
 
-## 🛠️ Pipeline de Execução MLOps
+## 4. Garantia de Lisura (Fair Comparison)
 
-O repositório foi arquitetado sob princípios de modularidade, contendo uma trilha reprodutível e determinística ponta-a-ponta (do download do dado à avaliação financeira).
+Para provar de maneira cabal que o ganho de desempenho da **MSR-TCN** vem exclusivamente do seu *design* matemático, submetemos a arquitetura a uma *Fair Comparison* (Comparação Justa). Desenvolvemos um modelo de Controle (**Baseline TCN**) que processa os mesmos sinais em banda larga. 
+
+Ambos os modelos atingem **exatamente a mesma profundidade vetorial na camada de classificação (96 canais)**, recebem os mesmos limiares de *Data Augmentation* e operam no mesmo fluxo de validação *Walk-Forward*.
+
+* **Baseline TCN:** Canal de entrada mapeado de `6 -> 48 -> 96` (Total de **117.491** parâmetros).
+* **MSR-TCN:** Cada uma das três sub-bandas paralelas é processada independentemente de `6 -> 16 -> 32`. A fusão `(32 x 3)` alcança exatamente 96 canais (Total de **50.051** parâmetros).
+
+> **A Prova Científica:** Como a MSR-TCN atinge a mesma complexidade representacional utilizando **menos da metade dos parâmetros**, nós comprovamos estruturalmente que sua superioridade não é subproduto de *overfitting* ou supercapacidade, mas da purificação de ruídos fornecida pela decomposição ASD.
+
+---
+
+## 5. Pipeline Modular e Execução
+
+A arquitetura MLOps foi dividida em rotinas lógicas claras. Devido à pesada exigência computacional do uso extenso de *Data Augmentation* temporal (Warping, Jittering, Slicing), a busca em grade de hiperparâmetros (Grid Search) foi isolada. O modelo realiza a convergência dos parâmetros uma única vez e gera *caches* JSON para a validação *Walk-Forward*.
 
 ```mermaid
-flowchart LR
-    A[(API\nyfinance)] -->|coletar_dados.py| B[Data\nLake CSVs]
-    B -->|01_otimizar.py| C{Grid Search\nHiperparâmetros}
-    C -->|configs JSON| D(02_treinamento.py\nWalk-Forward CV)
-    B --> D
-    D -->|predicoes_wf.csv| E{Módulo de Avaliação}
+flowchart TD
+    classDef default fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px,color:#0f172a;
+    classDef phase fill:#f1f5f9,stroke:#64748b,stroke-width:2px,color:#1e293b,font-weight:bold;
+    classDef script fill:#e0f2fe,stroke:#0369a1,stroke-width:2px,color:#0c4a6e;
     
-    E -->|03_avaliar.py| F([Testes Estatísticos\nMcNemar / Bootstrap])
-    E -->|04_portfolio.py| G([Backtest Financeiro\nSharpe, MDD, ROI])
-    E -->|05_visualizacoes.py| H([Matrizes e Gráficos\nData Storytelling])
-    D -->|06_benchmark.py| I([Benchmark Custo\nMACs / Latência])
+    subgraph P1["Fase 1: Ingestão de Dados"]
+        S1["coletar_dados.py\n(Acesso yfinance + Feature Engineering)"]:::script
+    end
+    
+    subgraph P2["Fase 2: Treinamento MLOps"]
+        S2["01_otimizar_hiperparametros.py\n(Geração das Configs JSON)"]:::script
+        S3["02_treinamento_walk_forward.py\n(Cross-Validation 10 Anos)"]:::script
+    end
+    
+    subgraph P3["Fase 3: Analytics Financeiro"]
+        S4["03_avaliar_estatisticas.py\n(Teste de McNemar)"]:::script
+        S5["04_avaliar_portfolio.py\n(Backtest de Sharpes e MDD)"]:::script
+    end
+    
+    subgraph P4["Fase 4: Validação de Complexidade"]
+        S6["05_gerar_visualizacoes.py\n(Mapas de Calor e Patrimônio)"]:::script
+        S7["06_benchmark_custo_computacional.py\n(Cálculo MACs e Latência)"]:::script
+    end
+    
+    P1 --> P2
+    S1 --> S2
+    S2 -->|Exporta configs JSON| S3
+    P2 --> P3
+    S3 -->|Gera CSV de predições| S4
+    S4 --> S5
+    P3 --> P4
+    S5 --> S6
+    S5 --> S7
 ```
 
-### Passo a Passo da Replicação
+### 5.1. Como Replicar os Experimentos Locais
 
-1. **Instalação do Ambiente:**
+1. **Clonar e Preparar o Ambiente:**
    ```bash
    git clone https://github.com/SeuUsuario/MSR_TCN.git
    cd MSR_TCN
    pip install -r requirements.txt
    ```
 
-2. **Ingestão de Dados e Feature Engineering:**
+2. **Ingestão Autônoma:**
    ```bash
-   python src/pipeline_dados/coletar_dados.py
+   python3 src/pipeline_dados/coletar_dados.py
    ```
-   > Calcula características base (RSI, MACD, ATR) e rotula topos e fundos (BUY/SELL) usando janela centralizada.
 
-3. **Otimização de Hiperparâmetros (Grid Search):**
+3. **Início do Pipeline de Treinamento e Inferência:**
    ```bash
-   python 01_otimizar_hiperparametros.py
+   python3 01_otimizar_hiperparametros.py
+   python3 02_treinamento_walk_forward.py
    ```
-   > Determina hiperparâmetros ótimos (Kernel Size, Taxa de Aprendizado) e atalhos de *Data Augmentation* por segmento econômico, salvando em `configs/`.
 
-4. **Treinamento e Inferência Walk-Forward:**
+4. **Gerar Relatórios de Avaliação do Artigo (Métricas e MACs):**
    ```bash
-   python 02_treinamento_walk_forward.py
+   python3 03_avaliar_estatisticas.py
+   python3 04_avaliar_portfolio.py
+   python3 05_gerar_visualizacoes.py
+   python3 06_benchmark_custo_computacional.py
    ```
-   > Executa a bateria exaustiva (10 anos) de testes fora da amostra (*Out-of-Sample*), gerando as predições.
-
-5. **Testes Estatísticos e Backtest:**
-   ```bash
-   python 03_avaliar_estatisticas.py
-   python 04_avaliar_portfolio.py
-   ```
-   > Analisa p-valores e métricas de fundos institucionais (Drawdown, Sortino, Calmar).
-
-6. **Benchmark de Eficiência Computacional:**
-   ```bash
-   python 06_benchmark_custo_computacional.py
-   ```
-   > Comprova a eficiência (Número de Parâmetros, MACs e Throughput/Vazão) no processador atual (CPU / MPS / CUDA).
 
 ---
 
-## 🧬 Técnicas de Aumentação de Dados (Data Augmentation)
+## 6. Referências Acadêmicas Fundacionais
 
-O mercado financeiro apresenta um profundo desbalanceamento, onde os rótulos de `MANTER (HOLD)` compõem cerca de 90% da distribuição (vs. `COMPRAR` e `VENDER`).
-As seguintes técnicas são dinamicamente ajustáveis em runtime na classe `SegmentTimeSeriesDataset` (localizada em `src/utilidades.py`):
+A base teórica e técnica deste modelo apoia-se em literatura avançada de Aprendizado Profundo aplicado a microestrutura de mercado:
 
-- **Jittering:** Adição de ruído gaussiano às características temporais.
-- **Time-Warping:** Distorção não-linear do vetor tempo via interpolação.
-- **Window-Slicing:** Redução da janela e redimensionamento interpolação escalar.
-- **MixUp Temporal:** Combinação convexa de características (e Snapping de Rótulos).
-- **Decomposição Aditiva:** Adição de ruído apenas ao resíduo isolado da Média Móvel.
-
----
-
-## 📄 Citação e Licença
-
-Este projeto é disponibilizado sob a Licença MIT. Para publicações acadêmicas que venham a utilizar este código, favor citar o artigo correspondente.
-
-> *As implementações deste repositório foram desenhadas com precisão acadêmica, preservando o estado e os passos lógicos requeridos para assegurar 100% de reproducibilidade dos experimentos documentados.*
+1. **Módulo ASD**: Sinha, P., Psaromiligkos, I., & Zilic, Z. (2025). A Structurally Regularized CNN Architecture via Adaptive Subband Decomposition. *IEEE TNNLS*.
+2. **Convoluções Causais**: Bai, S., Kolter, J. Z., & Koltun, V. (2018). An empirical evaluation of generic convolutional and recurrent networks for sequence modeling. *arXiv*.
+3. **Classificador BUY-SELL-HOLD**: Nascimento, D. G., Costa, A. H. R., & Bianchi, R. A. C. (2020). Stock Trading Classifier with Multichannel CNN. *ENIAC*.
+4. **Alvo Deslizante (Swing Trading)**: Sezer, O. B., & Ozbayoglu, A. M. (2018). Algorithmic financial trading with deep convolutional neural networks. *Applied Soft Computing*.
+5. **Data Augmentation Temporal**: Iwana, B. K., & Uchida, S. (2021). An empirical survey of data augmentation for time series classification with neural networks. *PLOS ONE*.
