@@ -47,58 +47,56 @@ O nosso modelo adota as **Temporal Convolutional Networks (TCN)** como *backbone
 
 ```mermaid
 graph TD
-    classDef input fill:#2E86AB,stroke:#333,stroke-width:2px,color:#fff;
-    classDef asd fill:#F24236,stroke:#333,stroke-width:2px,color:#fff;
-    classDef tcn fill:#388E3C,stroke:#333,stroke-width:2px,color:#fff;
-    classDef output fill:#FF9800,stroke:#333,stroke-width:2px,color:#fff;
+    classDef input fill:#e0e7ff,stroke:#000,stroke-width:1px,color:#000
+    classDef filter fill:#fff7ed,stroke:#000,stroke-width:1px,color:#000
+    classDef subband fill:#fce7f3,stroke:#000,stroke-width:1px,color:#000
+    classDef tcn fill:#f0fdf4,stroke:#000,stroke-width:1px,color:#000
+    classDef concat fill:#f3f4f6,stroke:#000,stroke-width:1px,color:#000
+    classDef dense fill:#fce7f3,stroke:#000,stroke-width:1px,color:#000
+    classDef out fill:#fefce8,stroke:#000,stroke-width:1px,color:#000
 
-    Input["Tensor de Entrada\n[Janela Temporal, Características]"]:::input
-
-    subgraph "Módulo ASD (Decomposição Assimétrica 1D)"
-        direction TB
-        L1_H["Filtro U1 (Passa-Alta)"]:::asd
-        L1_L["Filtro L1 (Passa-Baixa)"]:::asd
-        L2_H["Filtro U2 (Passa-Alta)"]:::asd
-        L2_L["Filtro L2 (Passa-Baixa)"]:::asd
-
-        Input --> L1_H
-        Input --> L1_L
-        L1_L --> L2_H
-        L1_L --> L2_L
-    end
-
-    subgraph "Sub-bandas Isoladas"
-        direction LR
-        SB1["Ruído\n(Alta Freq.)"]:::asd
-        SB2["Sazonalidade\n(Média Freq.)"]:::asd
-        SB3["Tendência\n(Baixa Freq.)"]:::asd
-        
-        L1_H --> SB1
-        L2_H --> SB2
-        L2_L --> SB3
-    end
-
-    subgraph "Camadas TCN Causais Dilatadas"
-        direction TB
-        TCN1["Subband-TCN 1"]:::tcn
-        TCN2["Subband-TCN 2"]:::tcn
-        TCN3["Subband-TCN 3"]:::tcn
-
-        SB1 --> TCN1
-        SB2 --> TCN2
-        SB3 --> TCN3
-    end
-
-    Concat["Concatenação Paralela de Características"]:::input
-    TCN1 --> Concat
-    TCN2 --> Concat
-    TCN3 --> Concat
-
-    FC["Rede Neural Densa\n(Focal Loss + Dropout)"]:::output
-    Concat --> FC
-
-    Out["Predição Final\n[COMPRAR, VENDER, MANTER]"]:::output
-    FC --> Out
+    IN["Entrada: X ∈ ℝ³² ˣ ⁶"]:::input
+    
+    U1["Filtro U₁ (Alta)"]:::filter
+    L1["Filtro L₁ (Baixa)"]:::filter
+    
+    IN --> U1
+    IN --> L1
+    
+    U2["Filtro U₂ (Méd)"]:::filter
+    L2["Filtro L₂ (Tend)"]:::filter
+    
+    L1 --> U2
+    L1 --> L2
+    
+    H1["H₁ (Ruído)<br/>C = 6"]:::subband
+    H2["H₂ (Sazonal)<br/>C = 6"]:::subband
+    Lout["Lₒᵤₜ (Tend)<br/>C = 6"]:::subband
+    
+    U1 --> H1
+    U2 --> H2
+    L2 --> Lout
+    
+    TCN1["<b>TCN Block 1</b><br/><i>2x Dilated Conv1D</i><br/><i>W.Norm, ReLU, Drop</i><br/><i>Residual (16 → 32)</i>"]:::tcn
+    TCN2["<b>TCN Block 2</b><br/><i>2x Dilated Conv1D</i><br/><i>W.Norm, ReLU, Drop</i><br/><i>Residual (16 → 32)</i>"]:::tcn
+    TCN3["<b>TCN Block 3</b><br/><i>2x Dilated Conv1D</i><br/><i>W.Norm, ReLU, Drop</i><br/><i>Residual (16 → 32)</i>"]:::tcn
+    
+    H1 --> TCN1
+    H2 --> TCN2
+    Lout --> TCN3
+    
+    CON["Concatenação de Sub-bandas (96 canais)"]:::concat
+    
+    TCN1 --> CON
+    TCN2 --> CON
+    TCN3 --> CON
+    
+    DEN["Camada Densa (Fully Connected)"]:::dense
+    
+    OUT["Classificação Focal Loss<br/>(Buy, Sell, Hold)"]:::out
+    
+    CON --> DEN
+    DEN --> OUT
 ```
 
 ---
@@ -107,14 +105,44 @@ graph TD
 
 Para assegurar rigor científico e total isolamento contra *Data Leakage*, abandonamos a validação cruzada estática tradicional (K-Fold). O repositório adota a Validação *Walk-Forward* com expansão iterativa em um horizonte de 10 anos (2015-2024).
 
-```text
-Eixo do Tempo ──────────────────────────────────────────────────────────────────────────────────────────►
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#93c5fd',
+    'primaryBorderColor': '#2563eb',
+    'secondaryColor': '#86efac',
+    'secondaryBorderColor': '#16a34a',
+    'tertiaryColor': '#fdba74',
+    'tertiaryBorderColor': '#ea580c',
+    'activeTaskBkgColor': '#93c5fd',
+    'activeTaskBorderColor': '#2563eb',
+    'doneTaskBkgColor': '#86efac',
+    'doneTaskBorderColor': '#16a34a',
+    'critBkgColor': '#fdba74',
+    'critBorderColor': '#ea580c',
+    'taskTextDarkColor': '#000000',
+    'taskTextLightColor': '#000000'
+  }
+}}%%
+gantt
+    dateFormat YYYY
+    axisFormat %Y
+    
+    section Iteração 1
+    Treino   :active, t1, 2009-01-01, 5y
+    Val      :done, v1, after t1, 1y
+    Teste OoS:crit, o1, after v1, 1y
 
-Iteração 1:  [█████ Treinamento (2009-2013) █████] [█ Validação (2014) █] [█ Teste OoS (2015) █]
-Iteração 2:             [█████ Treinamento (2010-2014) █████] [█ Validação (2015) █] [█ Teste OoS (2016) █]
-Iteração 3:                        [█████ Treinamento (2011-2015) █████] [█ Validação (2016) █] [█ Teste OoS (2017) █]
-Iteração 4:                                   [█████ Treinamento (2012-2016) █████] [█ Validação (2017) █] [█ Teste OoS (2018) █]
-... (Avanço iterativo continua até o ano de 2024)
+    section Iteração 2
+    Treino   :active, t2, 2010-01-01, 5y
+    Val      :done, v2, after t2, 1y
+    Teste OoS:crit, o2, after v2, 1y
+
+    section Iteração 3
+    Treino   :active, t3, 2011-01-01, 5y
+    Val      :done, v3, after t3, 1y
+    Teste OoS:crit, o3, after v3, 1y
 ```
 
 ---
