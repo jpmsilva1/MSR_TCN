@@ -34,7 +34,16 @@ Baseado em arquiteturas regularizadas estruturalmente, o modelo emprega uma cama
 
 Após a fragmentação, o processamento de características temporais é paralelizado. Cada sub-banda passa por um bloco isolado de **Redes Convolucionais Temporais (TCN)** com dilatações causais.
 
-### 2.3. Diagrama Top-Down da Arquitetura MSR-TCN
+### 2.3. O Papel das Redes Convolucionais Temporais (TCN)
+
+Historicamente, o processamento de séries temporais dependia de arquiteturas recorrentes (como LSTMs e GRUs). Contudo, no contexto financeiro de altíssima volatilidade, as RNNs sofrem do problema de desvanecimento de gradientes e possuem dificuldade em processar blocos massivos em paralelo.
+
+O nosso modelo adota as **Temporal Convolutional Networks (TCN)** como *backbone* de extração de características devido a três propriedades matemáticas fundamentais:
+1. **Causalidade Estrita (*Causal Convolutions*):** Garante, em nível arquitetural, que as informações de amanhã jamais retroalimentem as previsões de hoje. Não há vazamento de dados (*Data Leakage*).
+2. **Campo Receptivo Amplo (*Dilated Convolutions*):** A rede consegue "lembrar" de toda a janela histórica (32 dias) sem precisar de estados ocultos gigantescos, simplesmente espaçando (dilatando) o salto dos filtros de convolução.
+3. **Paralelização Massiva:** Diferente do processamento sequencial das LSTMs, a TCN aplica a convolução simultaneamente em todo o tensor de preços, resultando em um treinamento ordens de magnitude mais rápido em GPUs.
+
+### 2.4. Diagrama Top-Down da Arquitetura MSR-TCN
 
 ```mermaid
 graph TD
@@ -140,38 +149,33 @@ A arquitetura MLOps foi dividida em rotinas lógicas claras. Devido à pesada ex
 
 ```mermaid
 flowchart TD
-    classDef default fill:#f8fafc,stroke:#cbd5e1,stroke-width:1px,color:#0f172a;
-    classDef phase fill:#f1f5f9,stroke:#64748b,stroke-width:2px,color:#1e293b,font-weight:bold;
-    classDef script fill:#e0f2fe,stroke:#0369a1,stroke-width:2px,color:#0c4a6e;
+    classDef data fill:#e1f5fe,stroke:#0284c7,stroke-width:2px,color:#000
+    classDef tune fill:#fef08a,stroke:#ca8a04,stroke-width:2px,color:#000
+    classDef train fill:#d9f99d,stroke:#65a30d,stroke-width:2px,color:#000
+    classDef report fill:#fbcfe8,stroke:#db2777,stroke-width:2px,color:#000
+
+    D1[("API yfinance\n(coletar_dados.py)")]:::data
+    D2[("Data Lake Local\n(CSVs Isolados)")]:::data
     
-    subgraph P1["Fase 1: Ingestão de Dados"]
-        S1["coletar_dados.py\n(Acesso yfinance + Feature Engineering)"]:::script
+    subgraph MLOps["Pipeline MLOps TCN (Walk-Forward)"]
+        direction TB
+        
+        Tuner["Otimização Hiperparâmetros\n(01_otimizar_hiperparametros.py)"]:::tune
+        JSON["configs/melhores_parametros_*.json\n(Grid Search Salvo)"]:::tune
+        
+        Train["Treinamento Walk-Forward 10 Anos\n(02_treinamento_walk_forward.py)"]:::train
+        
+        Eval["Analytics e Backtest\n(03_avaliar.py / 04_portfolio.py)"]:::report
+        Bench["Benchmark Custo e Gráficos\n(05_visualizacoes.py / 06_benchmark.py)"]:::report
+        
+        D1 --> D2
+        D2 --> Tuner
+        Tuner --> JSON
+        JSON --> Train
+        D2 --> Train
+        Train --> Eval
+        Train --> Bench
     end
-    
-    subgraph P2["Fase 2: Treinamento MLOps"]
-        S2["01_otimizar_hiperparametros.py\n(Geração das Configs JSON)"]:::script
-        S3["02_treinamento_walk_forward.py\n(Cross-Validation 10 Anos)"]:::script
-    end
-    
-    subgraph P3["Fase 3: Analytics Financeiro"]
-        S4["03_avaliar_estatisticas.py\n(Teste de McNemar)"]:::script
-        S5["04_avaliar_portfolio.py\n(Backtest de Sharpes e MDD)"]:::script
-    end
-    
-    subgraph P4["Fase 4: Validação de Complexidade"]
-        S6["05_gerar_visualizacoes.py\n(Mapas de Calor e Patrimônio)"]:::script
-        S7["06_benchmark_custo_computacional.py\n(Cálculo MACs e Latência)"]:::script
-    end
-    
-    P1 --> P2
-    S1 --> S2
-    S2 -->|Exporta configs JSON| S3
-    P2 --> P3
-    S3 -->|Gera CSV de predições| S4
-    S4 --> S5
-    P3 --> P4
-    S5 --> S6
-    S5 --> S7
 ```
 
 ### 5.1. Como Replicar os Experimentos Locais
