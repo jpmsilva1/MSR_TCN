@@ -107,14 +107,7 @@ Para assegurar rigor científico e total isolamento contra *Data Leakage*, aband
 
 ```mermaid
 %%{init: {
-  'theme': 'base',
   'themeVariables': {
-    'primaryColor': '#93c5fd',
-    'primaryBorderColor': '#2563eb',
-    'secondaryColor': '#86efac',
-    'secondaryBorderColor': '#16a34a',
-    'tertiaryColor': '#fdba74',
-    'tertiaryBorderColor': '#ea580c',
     'activeTaskBkgColor': '#93c5fd',
     'activeTaskBorderColor': '#2563eb',
     'doneTaskBkgColor': '#86efac',
