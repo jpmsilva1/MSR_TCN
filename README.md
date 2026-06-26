@@ -134,7 +134,7 @@ Ambos os modelos atingem **exatamente a mesma profundidade vetorial na camada de
 
 ## 5. Pipeline Modular e Execução
 
-A arquitetura MLOps foi dividida em rotinas lógicas claras. Devido à pesada exigência computacional do uso extenso de *Data Augmentation* temporal (Warping, Jittering, Slicing), a busca em grade de hiperparâmetros (Grid Search) foi isolada. O modelo realiza a convergência dos parâmetros uma única vez e gera *caches* JSON para a validação *Walk-Forward*.
+A arquitetura MLOps foi dividida em rotinas lógicas claras. Devido à pesada exigência computacional do uso extenso das diversas taxonomias de *Data Augmentation* (perturbações de magnitude via *Jittering*, deformações temporais via *Warping* e *Slicing*, transformações de frequência por *Decomposição Espectral* e interpolação estocástica via *Mixup*), a busca em grade de hiperparâmetros (Grid Search) foi isolada. O modelo realiza a convergência dos parâmetros uma única vez e gera *caches* JSON para a validação *Walk-Forward*.
 
 ```mermaid
 flowchart TD
