@@ -165,34 +165,33 @@ Ambos os modelos atingem **exatamente a mesma profundidade vetorial na camada de
 A arquitetura MLOps foi dividida em rotinas lógicas claras. Devido à pesada exigência computacional do uso extenso das diversas taxonomias de *Data Augmentation* (perturbações de magnitude via *Jittering*, deformações temporais via *Warping* e *Slicing*, transformações de frequência por *Decomposição Espectral* e interpolação estocástica via *Mixup*), a busca em grade de hiperparâmetros (Grid Search) foi isolada. O modelo realiza a convergência dos parâmetros uma única vez e gera *caches* JSON para a validação *Walk-Forward*.
 
 ```mermaid
-flowchart TD
-    classDef data fill:#e1f5fe,stroke:#0284c7,stroke-width:2px,color:#000
-    classDef tune fill:#fef08a,stroke:#ca8a04,stroke-width:2px,color:#000
-    classDef train fill:#d9f99d,stroke:#65a30d,stroke-width:2px,color:#000
-    classDef report fill:#fbcfe8,stroke:#db2777,stroke-width:2px,color:#000
+flowchart LR
+    classDef data fill:#e0e7ff,stroke:#4f46e5,stroke-width:2px,color:#000
+    classDef process fill:#dcfce7,stroke:#15803d,stroke-width:2px,color:#000
+    classDef logic fill:#fef9c3,stroke:#a16207,stroke-width:2px,color:#000
+    classDef report fill:#fce7f3,stroke:#be185d,stroke-width:2px,color:#000
 
-    D1[("API yfinance\n(coletar_dados.py)")]:::data
-    D2[("Data Lake Local\n(CSVs Isolados)")]:::data
+    API[(API<br/>yfinance)]:::data
+    DL[Data<br/>Lake CSVs]:::data
+    GS{Grid Search<br/>Hiperparâmetros}:::logic
+    TR[02_treinamento.py<br/>Walk-Forward CV]:::process
+    EVAL{Módulo de<br/>Avaliação}:::logic
+    MCN([Teste McNemar<br/>Estatísticas]):::report
+    PORT([Backtest<br/>Sharpe / MDD]):::report
+    BENCH([Benchmark Custo<br/>MACs / Latência]):::process
+    VIS([Data Storytelling<br/>Gráficos]):::report
+
+    API -- coletar_dados.py --> DL
+    DL -- 01_otimizar_hiperparametros.py --> GS
+    GS -- configs JSON --> TR
+    DL --> TR
     
-    subgraph MLOps["Pipeline MLOps TCN (Walk-Forward)"]
-        direction TB
-        
-        Tuner["Otimização Hiperparâmetros\n(01_otimizar_hiperparametros.py)"]:::tune
-        JSON["configs/melhores_parametros_*.json\n(Grid Search Salvo)"]:::tune
-        
-        Train["Treinamento Walk-Forward 10 Anos\n(02_treinamento_walk_forward.py)"]:::train
-        
-        Eval["Analytics e Backtest\n(03_avaliar.py / 04_portfolio.py)"]:::report
-        Bench["Benchmark Custo e Gráficos\n(05_visualizacoes.py / 06_benchmark.py)"]:::report
-        
-        D1 --> D2
-        D2 --> Tuner
-        Tuner --> JSON
-        JSON --> Train
-        D2 --> Train
-        Train --> Eval
-        Train --> Bench
-    end
+    TR -- predicoes_wf.csv --> EVAL
+    EVAL -- 03_avaliar.py --> MCN
+    EVAL -- 04_portfolio.py --> PORT
+    
+    TR -- 06_benchmark.py --> BENCH
+    BENCH -- 05_visualizacoes.py --> VIS
 ```
 
 ### 5.1. Como Replicar os Experimentos Locais
