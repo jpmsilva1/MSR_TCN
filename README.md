@@ -107,25 +107,14 @@ graph TD
 
 Para assegurar rigor científico e total isolamento contra *Data Leakage*, abandonamos a validação cruzada estática tradicional (K-Fold). O repositório adota a Validação *Walk-Forward* com expansão iterativa em um horizonte de 10 anos (2015-2024).
 
-```mermaid
-gantt
-    dateFormat YYYY
-    axisFormat %Y
-    
-    section Iteração 1
-    Treino (5 Anos)   :active, 2009-01-01, 2013-12-31
-    Validação (1 Ano) :done,   2014-01-01, 2014-12-31
-    Teste (1 Ano)     :crit,   2015-01-01, 2015-12-31
+```text
+Eixo do Tempo ──────────────────────────────────────────────────────────────────────────────────────────►
 
-    section Iteração 2
-    Treino (5 Anos)   :active, 2010-01-01, 2014-12-31
-    Validação (1 Ano) :done,   2015-01-01, 2015-12-31
-    Teste (1 Ano)     :crit,   2016-01-01, 2016-12-31
-
-    section Iteração 3
-    Treino (5 Anos)   :active, 2011-01-01, 2015-12-31
-    Validação (1 Ano) :done,   2016-01-01, 2016-12-31
-    Teste (1 Ano)     :crit,   2017-01-01, 2017-12-31
+Iteração 1:  [█████ Treinamento (2009-2013) █████] [█ Validação (2014) █] [█ Teste OoS (2015) █]
+Iteração 2:             [█████ Treinamento (2010-2014) █████] [█ Validação (2015) █] [█ Teste OoS (2016) █]
+Iteração 3:                        [█████ Treinamento (2011-2015) █████] [█ Validação (2016) █] [█ Teste OoS (2017) █]
+Iteração 4:                                   [█████ Treinamento (2012-2016) █████] [█ Validação (2017) █] [█ Teste OoS (2018) █]
+... (Avanço iterativo continua até o ano de 2024)
 ```
 
 ---
