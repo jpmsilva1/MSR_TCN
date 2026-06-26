@@ -1,0 +1,19 @@
+# Core Machine Learning & Data Processing
+torch>=2.0.0
+pandas>=1.5.0
+numpy>=1.21.0
+scikit-learn>=1.0.2
+statsmodels>=0.13.2
+
+# Data Ingestion & Feature Engineering
+yfinance>=0.2.0
+ta>=0.10.0
+
+# Visualization & Reporting
+matplotlib>=3.5.0
+seaborn>=0.11.2
+plotly>=5.0.0
+
+# Profiling & Benchmarking
+thop>=0.1.1
+tqdm>=4.64.1

@@ -1,0 +1,8 @@
+{
+    "dropout": 0.4,
+    "learning_rate": 0.0005,
+    "kernel_size": 5,
+    "seq_len": 32,
+    "in_channels": 6,
+    "cv_accuracy": 0.401294498381877
+}

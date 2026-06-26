@@ -1,0 +1,14 @@
+{
+    "kernel_size": 3,
+    "dropout": 0.2,
+    "learning_rate": 0.001,
+    "gamma": 3,
+    "use_jitter": false,
+    "use_warp": true,
+    "use_slice": true,
+    "use_mixup": true,
+    "use_decomp": true,
+    "seq_len": 32,
+    "in_channels": 6,
+    "cv_f1_score": 0.35488063693454336
+}
