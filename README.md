@@ -206,10 +206,16 @@ flowchart TD
 
 ## 6. Referências Acadêmicas Fundacionais
 
-A base teórica e técnica deste modelo apoia-se em literatura avançada de Aprendizado Profundo aplicado a microestrutura de mercado:
+A base teórica e técnica deste modelo apoia-se em literatura avançada de Aprendizado Profundo aplicado a microestrutura de mercado e processamento de sinais. Se você utilizar este repositório, por favor cite as seguintes obras fundacionais:
 
-1. **Módulo ASD**: Sinha, P., Psaromiligkos, I., & Zilic, Z. (2025). A Structurally Regularized CNN Architecture via Adaptive Subband Decomposition. *IEEE TNNLS*.
-2. **Convoluções Causais**: Bai, S., Kolter, J. Z., & Koltun, V. (2018). An empirical evaluation of generic convolutional and recurrent networks for sequence modeling. *arXiv*.
-3. **Classificador BUY-SELL-HOLD**: Nascimento, D. G., Costa, A. H. R., & Bianchi, R. A. C. (2020). Stock Trading Classifier with Multichannel CNN. *ENIAC*.
-4. **Alvo Deslizante (Swing Trading)**: Sezer, O. B., & Ozbayoglu, A. M. (2018). Algorithmic financial trading with deep convolutional neural networks. *Applied Soft Computing*.
-5. **Data Augmentation Temporal**: Iwana, B. K., & Uchida, S. (2021). An empirical survey of data augmentation for time series classification with neural networks. *PLOS ONE*.
+### 📄 Decomposição Espectral (Módulo ASD)
+A extração e separação de frequências da MSR-TCN é baseada no trabalho original da Arquitetura CNN Regularizada por Estrutura:
+> **Sinha, P., Psaromiligkos, I., & Zilic, Z. (2025).** *A Structurally Regularized CNN Architecture via Adaptive Subband Decomposition.* IEEE Transactions on Neural Networks and Learning Systems (TNNLS).
+
+### 📄 Convoluções Causais (TCN)
+A fundação do mecanismo de processamento temporal dilatado que substitui LSTMs/RNNs é baseada na arquitetura TCN original:
+> **Bai, S., Kolter, J. Z., & Koltun, V. (2018).** *An empirical evaluation of generic convolutional and recurrent networks for sequence modeling.* arXiv preprint arXiv:1803.01271. [Link do Artigo](https://arxiv.org/abs/1803.01271)
+
+### 📄 Classificação Financeira (Labeling)
+- **Nascimento, D. G., Costa, A. H. R., & Bianchi, R. A. C. (2020).** *Stock Trading Classifier with Multichannel CNN.* ENIAC.
+- **Sezer, O. B., & Ozbayoglu, A. M. (2018).** *Algorithmic financial trading with deep convolutional neural networks.* Applied Soft Computing.
