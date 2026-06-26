@@ -1,0 +1,1758 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{minted}
+\usepackage[a4paper, margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+% Configuração para o minted quebrar linhas longas
+\setminted{breaklines=true, breakanywhere=true, fontsize=\scriptsize, linenos=true}
+\usemintedstyle{vs}
+
+\title{\textbf{Anexo de Códigos: MSR-TCN}}
+\author{Pipeline MLOps Completo}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+\section{configuracoes.py}
+\textbf{Caminho do arquivo:} \texttt{src/configuracoes.py}
+
+\begin{minted}{python}
+"""
+Módulo de configurações para o projeto MSR-TCN.
+Define os segmentos do mercado financeiro, seus respectivos ativos (tickers) e os caminhos globais.
+"""
+import os
+from typing import Dict, List
+
+# Define os 8 segmentos do mercado financeiro utilizados no artigo para avaliação.
+# Estes segmentos cobrem ações brasileiras (BlueChips, SmallCaps), Fundos Imobiliários (FIIs), 
+# BDRs, Commodities, Mega-Caps dos EUA, Empresas Tradicionais dos EUA e Câmbio.
+SEGMENTOS: Dict[str, List[str]] = {
+    'BlueChips': [
+        'PETR4.SA', 'VALE3.SA', 'ITUB4.SA', 'BBDC4.SA', 'ABEV3.SA', 
+        'WEGE3.SA', 'SUZB3.SA', 'RENT3.SA', 'EQTL3.SA', 'RADL3.SA'
+    ],
+    'SmallCaps': [
+        'MGLU3.SA', 'YDUQ3.SA', 'POMO4.SA', 'TEND3.SA', 
+        'TASA4.SA', 'FLRY3.SA', 'MRVE3.SA', 'RAPT4.SA'
+    ],
+    'FIIs': [
+        'KNRI11.SA', 'HGLG11.SA', 'MXRF11.SA', 'HGBS11.SA', 'BRCR11.SA',
+        'SHPH11.SA', 'HTMX11.SA', 'HGRE11.SA', 'VRTA11.SA', 'KNCR11.SA'
+    ],
+    'BDRs': [
+        'AAPL34.SA', 'MSFT34.SA', 'AMZO34.SA', 'GOGL34.SA', 
+        'DISB34.SA', 'TSLA34.SA', 'JNJB34.SA', 'M1TA34.SA'
+    ],
+    'CommoditiesExp': [
+        'GC=F', 'SI=F', 'CL=F', 'BZ=F', 'ZS=F', 
+        'ZC=F', 'KC=F', 'LE=F', 'SB=F', 'HG=F',
+        'PL=F', 'PA=F', 'CC=F', 'CT=F', 'NG=F'
+    ],
+    'MegaCapsTech': [
+        'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 
+        'META', 'TSLA', 'NFLX', 'ADBE', 'CRM', 
+        'AMD', 'INTC', 'CSCO', 'QCOM', 'TXN', 
+        'AVGO', 'AMAT', 'MU', 'LRCX', 'INTU'
+    ],
+    'TradicionaisGlobais': [
+        'JNJ', 'PG', 'XOM', 'CVX', 'JPM', 
+        'V', 'KO', 'PEP', 'WMT', 'MCD', 
+        'NKE', 'DIS', 'BA', 'PFE', 'UNH', 
+        'HD', 'VZ', 'T', 'MRK', 'ABT'
+    ],
+    'CambioGlobal': [
+        'EURUSD=X', 'JPY=X', 'GBPUSD=X', 'AUDUSD=X', 'USDCAD=X', 
+        'USDCHF=X', 'NZDUSD=X', 'EURGBP=X', 'BRL=X'
+    ]
+}
+
+# Caminhos absolutos para garantir que a execução seja consistente independente do diretório de trabalho.
+DIRETORIO_RAIZ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+DIRETORIO_DADOS = os.path.join(DIRETORIO_RAIZ, 'data')
+DIRETORIO_CONFIGS = os.path.join(DIRETORIO_RAIZ, 'configs')
+DIRETORIO_RESULTADOS = os.path.join(DIRETORIO_RAIZ, 'results')
+DIRETORIO_CHECKPOINTS = os.path.join(DIRETORIO_RAIZ, 'checkpoints')
+
+# Garante que os diretórios existam
+for diretorio in [DIRETORIO_DADOS, DIRETORIO_CONFIGS, DIRETORIO_RESULTADOS, DIRETORIO_CHECKPOINTS]:
+    os.makedirs(diretorio, exist_ok=True)
+\end{minted}
+
+\newpage
+
+\section{utilidades.py}
+\textbf{Caminho do arquivo:} \texttt{src/utilidades.py}
+
+\begin{minted}{python}
+"""
+Módulo de utilidades para o projeto MSR-TCN.
+Contém funções de perda (loss), carregadores de dados e pipelines de geração de dataset
+com Aumentação de Dados (Data Augmentation) integrada para séries temporais.
+"""
+import os
+import torch
+import torch.nn as nn
+import numpy as np
+import pandas as pd
+from torch.utils.data import Dataset
+
+class FocalLoss(nn.Module):
+    """
+    Função Focal Loss para lidar com o desbalanceamento de classes.
+    Fornece redimensionamento dinâmico da entropia cruzada com base na confiança da predição.
+    """
+    def __init__(self, alpha=None, gamma=2):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        
+    def forward(self, inputs, targets):
+        ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        
+        if self.alpha is not None:
+            if isinstance(self.alpha, torch.Tensor):
+                alpha_t = self.alpha.to(targets.device)[targets]
+            else:
+                alpha_t = self.alpha[targets]
+            focal_loss = alpha_t * focal_loss
+            
+        return focal_loss.mean()
+
+
+class SegmentTimeSeriesDataset(Dataset):
+    """
+    Dataset para carregar dados de séries temporais financeiras segmentadas.
+    Suporta Aumentação de Dados em tempo de execução (Jitter, Time-Warp, Window-Slice, MixUp, Decomposition)
+    para mitigar o sobreajuste (overfitting) e lidar com o severo desbalanceamento de classes (~90% classe Hold).
+    """
+    def __init__(self, file_paths: list, window_size: int = 32, is_train: bool = False, 
+                 start_date: str = None, end_date: str = None, scaler: dict = None):
+        self.X = []
+        self.y = []
+        self.dates = []
+        self.tickers = []
+        self.ret_1d = []
+        self.is_train = is_train
+        self.scaler = scaler if scaler is not None else {}
+        
+        features_cols = ['Log_Return', 'Volume', 'RSI', 'MACD', 'MACD_Signal', 'ATR']
+        
+        temp_dfs = []
+        for file_path in file_paths:
+            if not os.path.exists(file_path): 
+                continue
+                
+            ticker = os.path.basename(file_path).replace('_full.csv', '')
+            df = pd.read_csv(file_path, index_col=0)
+            df.index = pd.to_datetime(df.index)
+            
+            if start_date:
+                df = df[df.index >= pd.to_datetime(start_date)]
+            if end_date:
+                df = df[df.index <= pd.to_datetime(end_date)]
+                
+            if len(df) > window_size:
+                # O alvo (target) é o retorno do dia seguinte
+                df['Ret_1d'] = df['Close'].pct_change(1).shift(-1) * 100
+                temp_dfs.append((df, ticker))
+        
+        if not temp_dfs:
+            self.X, self.y = None, None
+            self.da_flags = {}
+            return
+            
+        # Ajusta o padronizador (scaler) usando apenas os dados de treino para evitar vazamento de dados (data leakage)
+        if self.is_train:
+            combined_df = pd.concat([d[0] for d in temp_dfs])
+            for f in features_cols:
+                self.scaler[f] = {'mean': combined_df[f].mean(), 'std': combined_df[f].std()}
+        
+        # Aplica padronização e extrai janelas deslizantes
+        for df, ticker in temp_dfs:
+            for f in features_cols:
+                mean = self.scaler[f]['mean']
+                std = self.scaler[f]['std']
+                if std != 0:
+                    df[f] = (df[f] - mean) / std
+                    
+            data_X = df[features_cols].values
+            data_y = df['Label'].values
+            dates_arr = df.index.values
+            ret_1d_arr = df['Ret_1d'].fillna(0.0).values
+            
+            for i in range(len(df) - window_size):
+                self.X.append(data_X[i:(i + window_size)])
+                self.y.append(data_y[i + window_size])
+                
+                if not self.is_train:
+                    self.dates.append(dates_arr[i + window_size])
+                    self.tickers.append(ticker)
+                    self.ret_1d.append(ret_1d_arr[i + window_size])
+                
+        if self.X:
+            self.X = np.array(self.X, dtype=np.float32)
+            self.y = np.array(self.y, dtype=np.int64)
+        else:
+            self.X, self.y = None, None
+            
+        self.da_flags = {}
+            
+    def __len__(self):
+        return len(self.X) if self.X is not None else 0
+        
+    def set_da_flags(self, flags: dict):
+        """Habilita técnicas específicas de Aumentação de Dados."""
+        self.da_flags = flags
+
+    def apply_data_augmentation(self, x: np.ndarray, y: int):
+        """Aplica as estratégias de aumentação configuradas à janela de amostra."""
+        if self.da_flags.get('use_jitter'):
+            x += np.random.normal(0, 0.03, x.shape)
+            
+        if self.da_flags.get('use_warp'):
+            warp_factor = np.zeros_like(x)
+            for c in range(x.shape[1]):
+                warp_factor[:, c] = np.interp(
+                    np.linspace(0, 1, len(x)), 
+                    [0, 0.5, 1], 
+                    np.random.normal(1, 0.1, 3)
+                )
+            x *= warp_factor
+            
+        if self.da_flags.get('use_slice'):
+            slice_len = int(len(x) * 0.9)
+            start_idx = np.random.randint(0, len(x) - slice_len)
+            sliced_x = np.zeros_like(x)
+            for c in range(x.shape[1]):
+                sliced_x[:, c] = np.interp(
+                    np.linspace(0, 1, len(x)), 
+                    np.linspace(0, 1, slice_len), 
+                    x[start_idx : start_idx + slice_len, c]
+                )
+            x = sliced_x
+            
+        if self.da_flags.get('use_mixup'):
+            idx2 = np.random.randint(0, len(self.X))
+            x2 = self.X[idx2].copy()
+            lam = np.random.beta(0.5, 0.5)
+            x = lam * x + (1 - lam) * x2
+            # Label snapping: mantém o rótulo da amostra dominante
+            if lam < 0.5: 
+                y = self.y[idx2] 
+                
+        if self.da_flags.get('use_decomp'):
+            # Decomposição Temporal: adiciona ruído ao resíduo, preserva a tendência de média móvel
+            trend = np.zeros_like(x)
+            for c in range(x.shape[1]):
+                trend[:, c] = np.convolve(x[:, c], np.ones(3)/3, mode='same')
+            x = trend + (x - trend) + np.random.normal(0, 0.05, x.shape)
+            
+        return x, y
+
+    def __getitem__(self, idx):
+        x = self.X[idx].copy()
+        y = self.y[idx]
+        
+        if self.is_train:
+            x, y = self.apply_data_augmentation(x, y)
+                
+        x_tensor = torch.tensor(x, dtype=torch.float32).transpose(0, 1)
+        y_tensor = torch.tensor(y, dtype=torch.long)
+        return x_tensor, y_tensor
+\end{minted}
+
+\newpage
+
+\section{modelos.py}
+\textbf{Caminho do arquivo:} \texttt{src/modelos.py}
+
+\begin{minted}{python}
+"""
+Módulo de modelos para o projeto MSR-TCN.
+Contém as implementações da Decomposição Adaptativa em Subbandas (ASD),
+Redes Convolucionais Temporais (TCN) e a arquitetura completa do MSR-TCN,
+juntamente com modelos base (baselines) para comparação.
+"""
+import warnings
+import torch
+import torch.nn as nn
+from torch.nn.utils import weight_norm
+
+# Ignorar FutureWarnings relacionadas ao weight_norm em versões mais recentes do PyTorch
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*weight_norm.*")
+
+class AsymmetricASD1D(nn.Module):
+    """
+    Decomposição Adaptativa em Subbandas (ASD) 1D Assimétrica.
+    Decompõe a série temporal de entrada em 3 subbandas:
+    - A Camada 1 gera Alta Frequência (Ruído) e Baixa Frequência.
+    - A Camada 2 decompõe a Baixa Frequência em Média Frequência (Sazonalidade) e Baixa Frequência (Tendência).
+    """
+    def __init__(self, in_channels: int, filter_size: int = 5):
+        super(AsymmetricASD1D, self).__init__()
+        
+        padding = filter_size // 2
+        
+        # Camada 1
+        self.L1_U = nn.Conv1d(in_channels, in_channels, kernel_size=filter_size, padding=padding, groups=in_channels)
+        self.L1_L = nn.Conv1d(in_channels, in_channels, kernel_size=filter_size, padding=padding, groups=in_channels)
+        
+        # Camada 2 (Opera apenas na saída L1_L)
+        self.L2_U = nn.Conv1d(in_channels, in_channels, kernel_size=filter_size, padding=padding, groups=in_channels)
+        self.L2_L = nn.Conv1d(in_channels, in_channels, kernel_size=filter_size, padding=padding, groups=in_channels)
+        
+        # Decimação por 2 após cada filtro
+        self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
+        
+    def forward(self, x: torch.Tensor):
+        # x shape: (batch, in_channels, sequence_length)
+        
+        # Camada 1
+        y1_u = self.pool(self.L1_U(x)) # Alta frequência 1 (Ruído)
+        y1_l = self.pool(self.L1_L(x)) # Baixa frequência 1
+        
+        # Camada 2
+        y2_u = self.pool(self.L2_U(y1_l)) # Alta frequência 2 (Sazonalidade)
+        y2_l = self.pool(self.L2_L(y1_l)) # Baixa frequência 2 (Tendência)
+        
+        # Sincronizar as dimensões temporais para as 3 subbandas.
+        # y1_u sofreu 1 decimação, y2_u e y2_l sofreram 2 decimações.
+        # Max-pool em y1_u para sincronizar as dimensões.
+        y1_u_sync = self.pool(y1_u)
+        
+        return y1_u_sync, y2_u, y2_l
+
+
+class TemporalBlock(nn.Module):
+    """
+    Bloco Padrão de Rede Convolucional Temporal (TCN) com convoluções causais dilatadas.
+    """
+    def __init__(self, n_inputs: int, n_outputs: int, kernel_size: int, stride: int, dilation: int, padding: int, dropout: float = 0.2):
+        super(TemporalBlock, self).__init__()
+        self.pad = nn.ConstantPad1d((padding, 0), 0)
+        self.conv1 = weight_norm(nn.Conv1d(n_inputs, n_outputs, kernel_size,
+                                           stride=stride, padding=0, dilation=dilation))
+        self.relu1 = nn.LeakyReLU(0.1)
+        self.dropout1 = nn.Dropout(dropout)
+
+        self.conv2 = weight_norm(nn.Conv1d(n_outputs, n_outputs, kernel_size,
+                                           stride=stride, padding=0, dilation=dilation))
+        self.relu2 = nn.LeakyReLU(0.1)
+        self.dropout2 = nn.Dropout(dropout)
+
+        self.net = nn.Sequential(self.pad, self.conv1, self.relu1, self.dropout1,
+                                 self.pad, self.conv2, self.relu2, self.dropout2)
+        
+        self.downsample = nn.Conv1d(n_inputs, n_outputs, 1) if n_inputs != n_outputs else None
+        self.relu = nn.LeakyReLU(0.1)
+        self.init_weights()
+
+    def init_weights(self):
+        self.conv1.weight.data.normal_(0, 0.01)
+        self.conv2.weight.data.normal_(0, 0.01)
+        if self.downsample is not None:
+            self.downsample.weight.data.normal_(0, 0.01)
+
+    def forward(self, x: torch.Tensor):
+        out = self.net(x)
+        res = x if self.downsample is None else self.downsample(x)
+        return self.relu(out + res)
+
+
+class SubbandTCN(nn.Module):
+    """
+    TCN para processar uma única subbanda de forma independente.
+    """
+    def __init__(self, num_inputs: int, num_channels: list = [16, 32], kernel_size: int = 3, dropout: float = 0.2):
+        super(SubbandTCN, self).__init__()
+        layers = []
+        num_levels = len(num_channels)
+        for i in range(num_levels):
+            dilation_size = 2 ** i
+            in_channels = num_inputs if i == 0 else num_channels[i-1]
+            out_channels = num_channels[i]
+            layers += [TemporalBlock(in_channels, out_channels, kernel_size, stride=1, dilation=dilation_size,
+                                     padding=(kernel_size-1) * dilation_size, dropout=dropout)]
+
+        self.network = nn.Sequential(*layers)
+        self.pool = nn.AdaptiveAvgPool1d(1)
+
+    def forward(self, x: torch.Tensor):
+        # x shape: (batch, channels, seq_len)
+        out = self.network(x)
+        out = self.pool(out) # shape: (batch, channels, 1)
+        return out.squeeze(-1) # shape: (batch, channels)
+
+
+class MSRTCN1D(nn.Module):
+    """
+    MSR-TCN: Rede Convolucional Temporal Residual Multiescala.
+    Combina a Decomposição Adaptativa em Subbandas com blocos TCN causais.
+    """
+    def __init__(self, in_channels: int, seq_len: int, num_classes: int = 3, kernel_size: int = 3, dropout: float = 0.2):
+        super(MSRTCN1D, self).__init__()
+        self.asd = AsymmetricASD1D(in_channels=in_channels, filter_size=5)
+        
+        self.tcn_noise = SubbandTCN(in_channels, num_channels=[16, 32], kernel_size=kernel_size, dropout=dropout)
+        self.tcn_seasonality = SubbandTCN(in_channels, num_channels=[16, 32], kernel_size=kernel_size, dropout=dropout)
+        self.tcn_trend = SubbandTCN(in_channels, num_channels=[16, 32], kernel_size=kernel_size, dropout=dropout)
+        
+        self.fc = nn.Sequential(
+            nn.Linear(96, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout if dropout else 0.5),
+            nn.Linear(128, num_classes)
+        )
+        
+    def forward(self, x: torch.Tensor):
+        noise, seasonality, trend = self.asd(x)
+        
+        feat_noise = self.tcn_noise(noise)
+        feat_seasonality = self.tcn_seasonality(seasonality)
+        feat_trend = self.tcn_trend(trend)
+        
+        # Concatenar características de todas as subbandas
+        combined = torch.cat([feat_noise, feat_seasonality, feat_trend], dim=1)
+        out = self.fc(combined)
+        return out
+
+
+class BaselineTCN1D(nn.Module):
+    """
+    TCN de Controle (Full-Band) para comparação justa.
+    A quantidade de canais é igual à soma dos canais das 3 subbandas
+    do MSR-TCN, garantindo capacidade de aprendizado equivalente (contagem de parâmetros).
+    """
+    def __init__(self, in_channels: int, seq_len: int, num_classes: int = 3, kernel_size: int = 3, dropout: float = 0.2):
+        super(BaselineTCN1D, self).__init__()
+        
+        # MSR-TCN usa 3 subbandas com [16, 32] canais = total de [48, 96]
+        self.tcn = SubbandTCN(in_channels, num_channels=[48, 96], kernel_size=kernel_size, dropout=dropout)
+        
+        self.fc = nn.Sequential(
+            nn.Linear(96, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout if dropout else 0.5),
+            nn.Linear(128, num_classes)
+        )
+        
+    def forward(self, x: torch.Tensor):
+        feat = self.tcn(x)
+        out = self.fc(feat)
+        return out
+
+
+class SubbandCNN(nn.Module):
+    """
+    CNN Simples para processar cada subbanda independentemente (Modelo de Ablação).
+    """
+    def __init__(self, in_channels: int, out_channels: int = 16):
+        super(SubbandCNN, self).__init__()
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.relu1 = nn.LeakyReLU(0.1)
+        self.pool1 = nn.MaxPool1d(2)
+        
+        self.conv2 = nn.Conv1d(out_channels, out_channels*2, kernel_size=3, padding=1)
+        self.relu2 = nn.LeakyReLU(0.1)
+        self.pool2 = nn.MaxPool1d(2)
+        
+        self.flatten = nn.Flatten()
+        
+    def forward(self, x: torch.Tensor):
+        x = self.pool1(self.relu1(self.conv1(x)))
+        x = self.pool2(self.relu2(self.conv2(x)))
+        return self.flatten(x)
+
+
+class MSRCNN1D(nn.Module):
+    """
+    MSR-CNN (Modelo de Ablação).
+    Usa ASD 1D para gerar 3 subbandas e processa cada uma com uma CNN isolada.
+    """
+    def __init__(self, in_channels: int, seq_len: int, num_classes: int = 3):
+        super(MSRCNN1D, self).__init__()
+        self.asd = AsymmetricASD1D(in_channels=in_channels, filter_size=5)
+        
+        self.cnn_noise = SubbandCNN(in_channels, out_channels=16)
+        self.cnn_seasonality = SubbandCNN(in_channels, out_channels=16)
+        self.cnn_trend = SubbandCNN(in_channels, out_channels=16)
+        
+        final_seq = max(1, seq_len // 16)
+        cnn_out_features = 32 * final_seq 
+        
+        self.fc = nn.Sequential(
+            nn.Linear(cnn_out_features * 3, 128), 
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(128, num_classes)
+        )
+        
+    def forward(self, x: torch.Tensor):
+        noise, seasonality, trend = self.asd(x)
+        
+        feat_noise = self.cnn_noise(noise)
+        feat_seasonality = self.cnn_seasonality(seasonality)
+        feat_trend = self.cnn_trend(trend)
+        
+        combined = torch.cat([feat_noise, feat_seasonality, feat_trend], dim=1)
+        out = self.fc(combined)
+        return out
+
+
+class BaselineCNN1D(nn.Module):
+    """
+    CNN Convencional Full-Band (Modelo de Ablação).
+    Mesma contagem de parâmetros do MSR-CNN para comparação justa.
+    """
+    def __init__(self, in_channels: int, seq_len: int, num_classes: int = 3):
+        super(BaselineCNN1D, self).__init__()
+        
+        self.conv1 = nn.Conv1d(in_channels, 48, kernel_size=3, padding=1)
+        self.relu1 = nn.LeakyReLU(0.1)
+        self.pool1 = nn.MaxPool1d(2)
+        
+        self.conv2 = nn.Conv1d(48, 96, kernel_size=3, padding=1)
+        self.relu2 = nn.LeakyReLU(0.1)
+        self.pool2 = nn.MaxPool1d(2)
+        
+        self.pool_extra = nn.MaxPool1d(4)
+        self.flatten = nn.Flatten()
+        
+        final_seq = max(1, seq_len // 16)
+            
+        self.fc = nn.Sequential(
+            nn.Linear(96 * final_seq, 128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(128, num_classes)
+        )
+        
+    def forward(self, x: torch.Tensor):
+        x = self.pool1(self.relu1(self.conv1(x)))
+        x = self.pool2(self.relu2(self.conv2(x)))
+        x = self.pool_extra(x)
+        x = self.flatten(x)
+        out = self.fc(x)
+        return out
+\end{minted}
+
+\newpage
+
+\section{coletar\_dados.py}
+\textbf{Caminho do arquivo:} \texttt{src/pipeline\_dados/coletar\_dados.py}
+
+\begin{minted}{python}
+"""
+Pipeline de extração de dados e engenharia de características (feature engineering) para o MSR-TCN.
+Baixa dados históricos via yfinance, calcula indicadores técnicos
+e gera os rótulos (labels) com base em uma abordagem de janela deslizante centralizada.
+"""
+import os
+import sys
+import numpy as np
+import pandas as pd
+import yfinance as yf
+from ta.momentum import RSIIndicator
+from ta.trend import MACD
+from ta.volatility import AverageTrueRange
+
+# Garante a importação a partir de src.configuracoes
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+from configuracoes import SEGMENTOS, DIRETORIO_DADOS
+
+def processar_ativo(ticker: str):
+    """
+    Baixa dados históricos para um determinado ativo (ticker), calcula indicadores técnicos
+    e aplica o algoritmo de rotulagem de janela deslizante centralizada (topos e fundos).
+    """
+    print(f"Baixando dados para {ticker}...")
+    df = yf.download(ticker, start='2009-01-01', end='2024-12-20', progress=False)
+    
+    if df.empty:
+        print(f"Falha ao baixar os dados para {ticker}.")
+        return
+        
+    # Achata as colunas MultiIndex, se o yfinance as retornar dessa forma
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.droplevel(1)
+        
+    # 1. Engenharia de Características (Feature Engineering)
+    df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
+    
+    rsi = RSIIndicator(close=df['Close'], window=14)
+    df['RSI'] = rsi.rsi()
+    
+    macd = MACD(close=df['Close'], window_slow=26, window_fast=12, window_sign=9)
+    df['MACD'] = macd.macd()
+    df['MACD_Signal'] = macd.macd_signal()
+    
+    atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+    df['ATR'] = atr.average_true_range()
+    
+    # 2. Rotulagem de Topo/Fundo (janela centralizada de 11 dias)
+    window = 11
+    
+    # Inicializa o Rótulo (Label) como 0 (Manter/Hold)
+    df['Label'] = 0
+    
+    # Calcula os mínimos e máximos contínuos para a janela centralizada
+    # min_periods=window garante que não rotulemos as bordas com janelas incompletas
+    rolling_min = df['Close'].rolling(window=window, center=True, min_periods=window).min()
+    rolling_max = df['Close'].rolling(window=window, center=True, min_periods=window).max()
+    
+    # Se o fechamento atual for o mínimo da janela -> 2 (COMPRAR/BUY)
+    df.loc[df['Close'] == rolling_min, 'Label'] = 2
+    
+    # Se o fechamento atual for o máximo da janela -> 1 (VENDER/SELL)
+    df.loc[df['Close'] == rolling_max, 'Label'] = 1
+    
+    df.dropna(inplace=True)
+    
+    # Os dados são salvos sem padronização (unscaled) para evitar vazamento de dados. 
+    # A padronização será aplicada dinamicamente pelo Dataset do PyTorch usando apenas as estatísticas do conjunto de treino.
+    nome = ticker.replace('^', '').replace('=', '_')
+    caminho_saida = os.path.join(DIRETORIO_DADOS, f"{nome}_full.csv")
+    df.to_csv(caminho_saida)
+    print(f"Salvo {ticker} em {caminho_saida}")
+
+def main():
+    print("Iniciando o pipeline de ingestão de dados...")
+    for segmento, ativos in SEGMENTOS.items():
+        print(f"\nProcessando Segmento: {segmento}")
+        for ativo in ativos:
+            processar_ativo(ativo)
+    print("\nIngestão de dados concluída com sucesso.")
+
+if __name__ == "__main__":
+    main()
+\end{minted}
+
+\newpage
+
+\section{01\_otimizar\_hiperparametros.py}
+\textbf{Caminho do arquivo:} \texttt{01\_otimizar\_hiperparametros.py}
+
+\begin{minted}{python}
+"""
+Script de Otimização de Hiperparâmetros para o MSR-TCN.
+Executa uma busca em grade (grid search) para encontrar os hiperparâmetros e 
+estratégias de Aumentação de Dados (Data Augmentation) ideais para cada um dos 8 segmentos de mercado.
+"""
+import os
+import json
+import itertools
+import pandas as pd
+import torch
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+import sys
+# Garante que os módulos em src possam ser importados
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
+from configuracoes import SEGMENTOS, DIRETORIO_DADOS, DIRETORIO_CONFIGS
+from modelos import MSRTCN1D
+from utilidades import SegmentTimeSeriesDataset, FocalLoss
+
+def otimizar_segmento(nome_segmento: str, ativos_segmento: list, device: torch.device):
+    print(f"\n[{nome_segmento}] Carregando dados do segmento...")
+    arquivos_completos = [os.path.join(DIRETORIO_DADOS, f"{t.replace('^', '').replace('=', '_')}_full.csv") for t in ativos_segmento]
+    
+    # Utilizamos um período restrito (2013-2014) para uma busca de hiperparâmetros rápida.
+    # A avaliação real utiliza a validação Walk-Forward de 2015 a 2024.
+    dataset_treino = SegmentTimeSeriesDataset(arquivos_completos, is_train=True, start_date='2013-01-01', end_date='2013-12-31')
+    if len(dataset_treino) == 0:
+        print(f"[{nome_segmento}] Sem dados de otimização disponíveis. Ignorando.")
+        return None
+        
+    dataset_validacao = SegmentTimeSeriesDataset(arquivos_completos, is_train=False, start_date='2014-01-01', end_date='2014-12-31', scaler=dataset_treino.scaler)
+    
+    loader_treino = DataLoader(dataset_treino, batch_size=128, shuffle=True)
+    loader_validacao = DataLoader(dataset_validacao, batch_size=128, shuffle=False)
+        
+    # Pré-calcula os pesos alpha para a Focal Loss com base na distribuição de classes
+    alvos_treino = torch.tensor(dataset_treino.y, dtype=torch.long)
+    contagens = torch.bincount(alvos_treino, minlength=3).float()
+    contagens[contagens == 0] = 1.0
+    pesos_alpha = len(dataset_treino.y) / (3.0 * contagens)
+    pesos_alpha = pesos_alpha.to(device)
+        
+    grade = {
+        'kernel_size': [3, 5],
+        'dropout': [0.2],
+        'learning_rate': [1e-3, 5e-4],
+        'gamma': [2, 3],
+        'use_jitter': [True, False],
+        'use_warp': [True, False],
+        'use_slice': [True, False],
+        'use_mixup': [True, False],
+        'use_decomp': [True, False]
+    }
+    
+    chaves = grade.keys()
+    combinacoes = list(itertools.product(*grade.values()))
+    resultados = []
+    
+    print(f"[{nome_segmento}] Testando {len(combinacoes)} combinações na grade...")
+    
+    for idx, combo in enumerate(tqdm(combinacoes, desc=f"Grade {nome_segmento}", leave=False)):
+        parametros = dict(zip(chaves, combo))
+        dataset_treino.set_da_flags(parametros)
+        
+        modelo = MSRTCN1D(in_channels=6, seq_len=32, kernel_size=parametros['kernel_size'], dropout=parametros['dropout']).to(device)
+        criterio = FocalLoss(alpha=pesos_alpha, gamma=parametros['gamma'])
+        otimizador = optim.AdamW(modelo.parameters(), lr=parametros['learning_rate'], weight_decay=1e-4)
+        
+        melhor_perda_val = float('inf')
+        
+        # 5 épocas para avaliação rápida na busca em grade
+        for epoca in range(5):
+            modelo.train()
+            for X, y in loader_treino:
+                X, y = X.to(device), y.to(device)
+                otimizador.zero_grad()
+                saidas = modelo(X)
+                perda = criterio(saidas, y)
+                perda.backward()
+                otimizador.step()
+                
+            modelo.eval()
+            perda_val_epoca = 0.0
+            with torch.no_grad():
+                for X, y in loader_validacao:
+                    X, y = X.to(device), y.to(device)
+                    saidas = modelo(X)
+                    perda = criterio(saidas, y)
+                    perda_val_epoca += perda.item() * X.size(0)
+            
+            perda_val_epoca /= len(dataset_validacao)
+            if perda_val_epoca < melhor_perda_val: 
+                melhor_perda_val = perda_val_epoca
+            
+        resultados.append({
+            **parametros,
+            'val_loss': melhor_perda_val 
+        })
+        
+    df_resultados = pd.DataFrame(resultados).sort_values(by='val_loss', ascending=True)
+    
+    # Salva a melhor configuração
+    melhores_parametros = df_resultados.iloc[0].to_dict()
+    caminho_json_melhor = os.path.join(DIRETORIO_CONFIGS, f'melhores_parametros_{nome_segmento}.json')
+    
+    parametros_finais = {
+        **melhores_parametros,
+        'seq_len': 32,
+        'in_channels': 6
+    }
+    del parametros_finais['val_loss']
+    
+    with open(caminho_json_melhor, 'w') as f:
+        json.dump(parametros_finais, f, indent=4)
+        
+    print(f"[{nome_segmento}] Melhor configuração salva em: {caminho_json_melhor}")
+    return parametros_finais
+
+def main():
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    print(f"Iniciando Otimização de Hiperparâmetros usando o dispositivo: {device}")
+    
+    todos_melhores_parametros = []
+    
+    for nome_segmento, ativos in SEGMENTOS.items():
+        res = otimizar_segmento(nome_segmento, ativos, device)
+        if res is not None:
+            res['Segmento'] = nome_segmento
+            todos_melhores_parametros.append(res)
+            
+    if todos_melhores_parametros:
+        df_resumo = pd.DataFrame(todos_melhores_parametros)
+        colunas = ['Segmento'] + [c for c in df_resumo.columns if c != 'Segmento']
+        df_resumo = df_resumo[colunas]
+        
+        # Salva o resumo
+        diretorio_resultados = os.path.join(os.path.dirname(__file__), 'results')
+        os.makedirs(diretorio_resultados, exist_ok=True)
+        caminho_csv = os.path.join(diretorio_resultados, 'resumo_otimizacao.csv')
+        df_resumo.to_csv(caminho_csv, index=False)
+        print(f"\n[Sucesso] Resumo da otimização salvo em: {caminho_csv}")
+
+if __name__ == "__main__":
+    main()
+\end{minted}
+
+\newpage
+
+\section{02\_treinamento\_walk\_forward.py}
+\textbf{Caminho do arquivo:} \texttt{02\_treinamento\_walk\_forward.py}
+
+\begin{minted}{python}
+"""
+Script de Treinamento de Validação Cruzada Walk-Forward para o MSR-TCN.
+Avalia o modelo ao longo de um período de 10 anos (2015-2024) utilizando uma abordagem
+de janela em expansão (expanding window) para evitar vazamento de dados.
+"""
+import os
+import json
+import pandas as pd
+import torch
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from sklearn.metrics import accuracy_score, f1_score
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
+
+from configuracoes import SEGMENTOS, DIRETORIO_DADOS, DIRETORIO_CONFIGS, DIRETORIO_CHECKPOINTS, DIRETORIO_RESULTADOS
+from modelos import MSRTCN1D, BaselineTCN1D
+from utilidades import FocalLoss, SegmentTimeSeriesDataset
+
+
+def treinar_e_avaliar_modelo(modelo, loader_treino, loader_validacao, loader_teste, device, criterio, 
+                             epocas=10, caminho_salvar='modelo.pt', lr=1e-3, caminho_plotar=None):
+    """
+    Loop de treinamento padrão com parada antecipada na validação (salvando o melhor modelo).
+    """
+    otimizador = optim.AdamW(modelo.parameters(), lr=lr, weight_decay=1e-4)
+    melhor_perda_val = float('inf')
+    
+    perdas_treino = []
+    perdas_validacao = []
+    
+    pbar = tqdm(range(epocas), desc=f"Treinando {os.path.basename(caminho_salvar)}", leave=False)
+    for epoca in pbar:
+        modelo.train()
+        perda_treino_epoca = 0.0
+        for X, y in loader_treino:
+            X, y = X.to(device), y.to(device)
+            otimizador.zero_grad()
+            saidas = modelo(X)
+            perda = criterio(saidas, y)
+            perda.backward()
+            otimizador.step()
+            perda_treino_epoca += perda.item() * X.size(0)
+            
+        perda_treino_epoca /= len(loader_treino.dataset)
+        perdas_treino.append(perda_treino_epoca)
+            
+        modelo.eval()
+        perda_val_epoca = 0.0
+        with torch.no_grad():
+            for X, y in loader_validacao:
+                X, y = X.to(device), y.to(device)
+                saidas = modelo(X)
+                perda = criterio(saidas, y)
+                perda_val_epoca += perda.item() * X.size(0)
+        
+        perda_val_epoca /= len(loader_validacao.dataset)
+        perdas_validacao.append(perda_val_epoca)
+        
+        pbar.set_postfix({'T_Loss': f"{perda_treino_epoca:.4f}", 'V_Loss': f"{perda_val_epoca:.4f}"})
+        
+        if perda_val_epoca < melhor_perda_val:
+            melhor_perda_val = perda_val_epoca
+            torch.save(modelo.state_dict(), caminho_salvar)
+            
+    if caminho_plotar:
+        import matplotlib.pyplot as plt
+        os.makedirs(os.path.dirname(caminho_plotar), exist_ok=True)
+        plt.figure(figsize=(10, 6))
+        plt.plot(range(1, epocas + 1), perdas_treino, label='Treino', color='#2E86AB', linewidth=2)
+        plt.plot(range(1, epocas + 1), perdas_validacao, label='Validação', color='#F24236', linewidth=2, linestyle='--')
+        plt.title('Curvas de Aprendizado (Loss vs Épocas)', fontsize=14, fontweight='bold')
+        plt.xlabel('Época')
+        plt.ylabel('Focal Loss')
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.tight_layout()
+        plt.savefig(caminho_plotar, dpi=300)
+        plt.close()
+            
+    # Avaliação final no conjunto de Teste
+    modelo.load_state_dict(torch.load(caminho_salvar))
+    modelo.eval()
+    todas_preds, todos_alvos = [], []
+    with torch.no_grad():
+        for X, y in loader_teste:
+            X, y = X.to(device), y.to(device)
+            saidas = modelo(X)
+            _, previso = torch.max(saidas, 1)
+            todas_preds.extend(previso.cpu().numpy())
+            todos_alvos.extend(y.cpu().numpy())
+            
+    acc = accuracy_score(todos_alvos, todas_preds)
+    f1 = f1_score(todos_alvos, todas_preds, average='macro')
+    return acc, f1, todas_preds, todos_alvos
+
+
+def treinar_e_avaliar_tcn(nome_modelo, segmento, loader_treino, loader_validacao, loader_teste, device, pesos_alpha=None, melhores_parametros=None):
+    print(f"  Treinando {nome_modelo} para {segmento}...")
+    
+    # Fallback para os parâmetros padrão se as configurações estiverem faltando
+    if melhores_parametros is None:
+        melhores_parametros = {'kernel_size': 3, 'dropout': 0.2, 'learning_rate': 1e-3}
+        
+    if nome_modelo == 'MSRTCN':
+        modelo = MSRTCN1D(
+            in_channels=6, 
+            seq_len=32,
+            kernel_size=melhores_parametros.get('kernel_size', 3),
+            dropout=melhores_parametros.get('dropout', 0.2)
+        ).to(device)
+    else:
+        # TCN Baseline com quantidade equivalente de parâmetros
+        modelo = BaselineTCN1D(
+            in_channels=6,
+            seq_len=32,
+            kernel_size=melhores_parametros.get('kernel_size', 3),
+            dropout=melhores_parametros.get('dropout', 0.2)
+        ).to(device)
+    
+    criterio = FocalLoss(gamma=2, alpha=pesos_alpha)
+    
+    caminho_salvar = os.path.join(DIRETORIO_CHECKPOINTS, f"{nome_modelo}_{segmento}.pt")
+    caminho_plotar = os.path.join(DIRETORIO_RESULTADOS, 'curvas_aprendizado', f"ca_{nome_modelo}_{segmento}.png")
+    
+    return treinar_e_avaliar_modelo(
+        modelo, loader_treino, loader_validacao, loader_teste, device, criterio, 
+        epocas=10, caminho_salvar=caminho_salvar, lr=melhores_parametros.get('learning_rate', 1e-3),
+        caminho_plotar=caminho_plotar
+    )
+
+def main():
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    print(f"Iniciando Experimento MSR-TCN Walk-Forward (Dispositivo: {device})")
+    
+    resultados = []
+    
+    # No artigo original, 5 dos 8 segmentos mostraram um desempenho significativamente superior
+    segmentos_vencedores = ['SmallCaps', 'FIIs', 'MegaCapsTech', 'TradicionaisGlobais', 'CambioGlobal']
+    segmentos_alvo = {k: v for k, v in SEGMENTOS.items() if k in segmentos_vencedores}
+    
+    for segmento, ativos in tqdm(segmentos_alvo.items(), desc="Segmentos"):
+        print(f"\n--- Segmento: {segmento} ---")
+        arquivos_completos = [os.path.join(DIRETORIO_DADOS, f"{t.replace('^', '').replace('=', '_')}_full.csv") for t in ativos]
+        
+        caminho_json = os.path.join(DIRETORIO_CONFIGS, f"melhores_parametros_{segmento}.json")
+        melhores_parametros = None
+        if os.path.exists(caminho_json):
+            with open(caminho_json, 'r') as f:
+                melhores_parametros = json.load(f)
+            print(f"  Parâmetros otimizados carregados: LR={melhores_parametros.get('learning_rate')}, Kernel={melhores_parametros.get('kernel_size')}")
+        else:
+            print(f"  Aviso: {caminho_json} não encontrado. Usando parâmetros padrão.")
+            
+        todos_alvos_msrtcn, todas_preds_msrtcn = [], []
+        todos_alvos_baseline, todas_preds_baseline = [], []
+        
+        todas_datas, todos_ativos, todos_ret_1d = [], [], []
+        
+        # Validação Walk-Forward: 2015 a 2024
+        # Treino: [ano_teste - 6] a [ano_teste - 2]
+        # Validação: [ano_teste - 1]
+        # Teste: [ano_teste]
+        for ano_teste in range(2015, 2025):
+            print(f"  [Walk-Forward] Ano de Teste: {ano_teste}")
+            
+            inicio_treino = f"{ano_teste - 6}-01-01"
+            fim_treino = f"{ano_teste - 2}-12-31"
+            inicio_val = f"{ano_teste - 1}-01-01"
+            fim_val = f"{ano_teste - 1}-12-31"
+            inicio_teste = f"{ano_teste}-01-01"
+            fim_teste = f"{ano_teste}-12-31"
+            
+            dataset_treino = SegmentTimeSeriesDataset(arquivos_completos, is_train=True, start_date=inicio_treino, end_date=fim_treino)
+            if len(dataset_treino) == 0: continue
+                
+            dataset_val = SegmentTimeSeriesDataset(arquivos_completos, is_train=False, start_date=inicio_val, end_date=fim_val, scaler=dataset_treino.scaler)
+            dataset_teste = SegmentTimeSeriesDataset(arquivos_completos, is_train=False, start_date=inicio_teste, end_date=fim_teste, scaler=dataset_treino.scaler)
+            
+            if len(dataset_val) == 0 or len(dataset_teste) == 0: continue
+                
+            if melhores_parametros: 
+                dataset_treino.set_da_flags(melhores_parametros)
+                
+            todas_datas.extend(dataset_teste.dates)
+            todos_ativos.extend(dataset_teste.tickers)
+            todos_ret_1d.extend(dataset_teste.ret_1d)
+                
+            loader_treino = DataLoader(dataset_treino, batch_size=128, shuffle=True)
+            loader_val = DataLoader(dataset_val, batch_size=128, shuffle=False)
+            loader_teste = DataLoader(dataset_teste, batch_size=128, shuffle=False)
+            
+            # Pesos dinâmicos da Focal Loss
+            y_tensor = torch.tensor(dataset_treino.y, dtype=torch.long)
+            contagens = torch.bincount(y_tensor, minlength=3).float()
+            contagens[contagens == 0] = 1.0
+            pesos_alpha = len(dataset_treino.y) / (3.0 * contagens)
+            pesos_alpha = pesos_alpha.to(device)
+            
+            acc_m, f1_m, p_m, t_m = treinar_e_avaliar_tcn('MSRTCN', f"{segmento}_{ano_teste}", loader_treino, loader_val, loader_teste, device, pesos_alpha, melhores_parametros)
+            acc_b, f1_b, p_b, t_b = treinar_e_avaliar_tcn('BaselineTCN', f"{segmento}_{ano_teste}", loader_treino, loader_val, loader_teste, device, pesos_alpha, melhores_parametros)
+            
+            todas_preds_msrtcn.extend(p_m)
+            todos_alvos_msrtcn.extend(t_m)
+            todas_preds_baseline.extend(p_b)
+            todos_alvos_baseline.extend(t_b)
+            
+        if len(todos_alvos_msrtcn) == 0: continue
+            
+        acc_msrtcn = accuracy_score(todos_alvos_msrtcn, todas_preds_msrtcn)
+        f1_msrtcn = f1_score(todos_alvos_msrtcn, todas_preds_msrtcn, average='macro')
+        acc_baseline = accuracy_score(todos_alvos_baseline, todas_preds_baseline)
+        f1_baseline = f1_score(todos_alvos_baseline, todas_preds_baseline, average='macro')
+        
+        # Salva as predições para avaliação estatística e análise de portfólio
+        df_segmento = pd.DataFrame({
+            'Data': todas_datas,
+            'Ativo': todos_ativos,
+            'Ret_1d': todos_ret_1d,
+            'Alvo': todos_alvos_msrtcn,
+            'BaselineTCN_Pred': todas_preds_baseline,
+            'MSRTCN_Pred': todas_preds_msrtcn
+        })
+        df_segmento.to_csv(os.path.join(DIRETORIO_RESULTADOS, f'predicoes_{segmento}_wf.csv'), index=False)
+        
+        resultados.append({
+            'Segmento': segmento,
+            'BaselineTCN_Acc': acc_baseline, 'BaselineTCN_F1': f1_baseline,
+            'MSRTCN_Acc': acc_msrtcn, 'MSRTCN_F1': f1_msrtcn
+        })
+        
+    df_resultados = pd.DataFrame(resultados)
+    df_resultados.to_csv(os.path.join(DIRETORIO_RESULTADOS, 'resumo_metricas_walk_forward.csv'), index=False)
+    
+    print("\nResultados Globais MSR-TCN (Walk-Forward):")
+    print(df_resultados)
+    print("\nTreinamento Walk-Forward concluído com sucesso!")
+
+if __name__ == '__main__':
+    main()
+\end{minted}
+
+\newpage
+
+\section{03\_avaliar\_estatisticas.py}
+\textbf{Caminho do arquivo:} \texttt{03\_avaliar\_estatisticas.py}
+
+\begin{minted}{python}
+"""
+Script de Avaliação Estatística para o MSR-TCN.
+Realiza o Teste de McNemar e testes de Bootstrap para o F1-Score, avaliando
+a significância estatística da superioridade do MSR-TCN sobre a TCN de Controle (Baseline).
+"""
+import os
+import glob
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import accuracy_score, f1_score
+from statsmodels.stats.contingency_tables import mcnemar
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
+
+from configuracoes import DIRETORIO_RESULTADOS
+
+def configurar_estilo_visualizacao():
+    """Configura o estilo visual dos gráficos (padrão acadêmico/profissional)."""
+    plt.rcParams.update({
+        'figure.facecolor': '#FAFAFA',
+        'axes.facecolor': '#FAFAFA',
+        'axes.edgecolor': '#E0E0E0',
+        'axes.labelcolor': '#333333',
+        'text.color': '#333333',
+        'xtick.color': '#666666',
+        'ytick.color': '#666666',
+        'grid.color': '#F0F0F0',
+        'font.size': 12,
+        'font.family': 'sans-serif',
+        'axes.spines.top': False,
+        'axes.spines.right': False
+    })
+    sns.set_theme(style='white', context='talk')
+
+def calcular_mcnemar_pareado(alvo, pred_a, pred_b):
+    """
+    Calcula o p-valor do Teste de McNemar para avaliar se a diferença de precisão
+    entre dois modelos é estatisticamente significativa.
+    """
+    correto_a = (pred_a == alvo).values
+    correto_b = (pred_b == alvo).values
+
+    a_errou_b_acertou = sum((~correto_a) & correto_b)
+    a_acertou_b_errou = sum(correto_a & (~correto_b))
+    ambos_acertaram = sum(correto_a & correto_b)
+    ambos_erraram = sum((~correto_a) & (~correto_b))
+
+    tabela = [[ambos_acertaram, a_errou_b_acertou],
+              [a_acertou_b_errou, ambos_erraram]]
+    
+    n_discordantes = a_errou_b_acertou + a_acertou_b_errou
+    is_exact = n_discordantes < 25
+    resultado = mcnemar(tabela, exact=is_exact, correction=True)
+    return resultado.pvalue
+
+def calcular_bootstrap_f1(alvo, pred_a, pred_b, n_iteracoes=1000):
+    """
+    Calcula a significância (p-valor) via Bootstrap para verificar se o Modelo B (MSR-TCN)
+    é sistematicamente superior ao Modelo A (Baseline) na métrica de F1-Score.
+    """
+    f1_a_orig = f1_score(alvo, pred_a, average='macro')
+    f1_b_orig = f1_score(alvo, pred_b, average='macro')
+    
+    n = len(alvo)
+    alvo = np.array(alvo)
+    pred_a = np.array(pred_a)
+    pred_b = np.array(pred_b)
+    
+    contador_b_melhor = 0
+    for _ in range(n_iteracoes):
+        indices = np.random.choice(n, n, replace=True)
+        f1_a = f1_score(alvo[indices], pred_a[indices], average='macro', zero_division=0)
+        f1_b = f1_score(alvo[indices], pred_b[indices], average='macro', zero_division=0)
+        if f1_b > f1_a:
+            contador_b_melhor += 1
+            
+    p_valor = 1.0 - (contador_b_melhor / n_iteracoes)
+    return p_valor, f1_a_orig, f1_b_orig
+
+def plotar_p_valores(df_resultados, diretorio_saida):
+    """
+    Gera um gráfico de barras destacando o grau de certeza (-log10 do p-valor)
+    da superioridade do MSR-TCN sobre a TCN de Controle em cada segmento.
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    eps = 1e-300
+    df_resultados['-log10(p)'] = -np.log10(df_resultados['p_value_F1'].astype(float) + eps)
+    cores = ['#388E3C' if p < 0.05 else '#B0BEC5' for p in df_resultados['p_value_F1']]
+    
+    barras = sns.barplot(x='Segmento', y='-log10(p)', data=df_resultados, palette=cores, ax=ax)
+    
+    limiar = -np.log10(0.05)
+    ax.axhline(limiar, color='#D32F2F', linestyle='--', label=rf'Significância Mínima ($\alpha=0.05$)', linewidth=2)
+    
+    ax.set_title('Significância da Evolução no F1-Score: MSR-TCN vs TCN Controle (Bootstrap)', fontsize=18, fontweight='bold', pad=20)
+    ax.set_ylabel('Grau de Certeza (-log10 p-value)', fontweight='bold')
+    ax.set_xlabel('Segmento Econômico', fontweight='bold')
+    plt.xticks(rotation=45)
+    ax.legend(frameon=False)
+    
+    for idx, barra in enumerate(barras.patches):
+        pval = df_resultados['p_value_F1'].iloc[idx]
+        if pval < 0.05:
+            ax.text(barra.get_x() + barra.get_width()/2., barra.get_height() + 0.5,
+                    f'p<{pval:.3f}', ha='center', va='bottom', fontsize=9, color='#388E3C', fontweight='bold')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(diretorio_saida, 'significancia_f1_segmentos.png'), dpi=300)
+    plt.close()
+
+def main():
+    configurar_estilo_visualizacao()
+    diretorio_analises = os.path.join(DIRETORIO_RESULTADOS, 'analises_estatisticas')
+    os.makedirs(diretorio_analises, exist_ok=True)
+    
+    # Busca os arquivos de predições gerados pela validação Walk-Forward
+    arquivos_predicoes = glob.glob(os.path.join(DIRETORIO_RESULTADOS, 'predicoes_*_wf.csv'))
+    
+    if not arquivos_predicoes:
+        print("Execute o script de Treinamento Walk-Forward (02_) primeiro para gerar as predições.")
+        return
+        
+    resultados = []
+    
+    for caminho in arquivos_predicoes:
+        nome_arquivo = os.path.basename(caminho)
+        segmento = nome_arquivo.replace('predicoes_', '').replace('_wf.csv', '')
+        
+        df = pd.read_csv(caminho)
+            
+        pval_acc = calcular_mcnemar_pareado(df['Alvo'], df['BaselineTCN_Pred'], df['MSRTCN_Pred'])
+        pval_f1, f1_base, f1_msr = calcular_bootstrap_f1(df['Alvo'], df['BaselineTCN_Pred'], df['MSRTCN_Pred'])
+        acc_msrtcn = accuracy_score(df['Alvo'], df['MSRTCN_Pred'])
+        acc_baseline = accuracy_score(df['Alvo'], df['BaselineTCN_Pred'])
+        
+        resultados.append({
+            'Segmento': segmento,
+            'Amostras (N)': len(df),
+            'Acurácia TCN Controle': f"{acc_baseline*100:.2f}%",
+            'Acurácia MSR-TCN': f"{acc_msrtcn*100:.2f}%",
+            'F1 TCN Controle': f"{f1_base:.4f}",
+            'F1 MSR-TCN': f"{f1_msr:.4f}",
+            'p_value_Acc': pval_acc,
+            'p_value_F1': pval_f1,
+            'MSR_Venceu_F1_Com_Significancia': 'Sim' if pval_f1 < 0.05 else 'Não'
+        })
+        
+    if resultados:
+        df_resultados = pd.DataFrame(resultados)
+        caminho_csv = os.path.join(diretorio_analises, 'testes_hipotese_segmentos.csv')
+        df_resultados.to_csv(caminho_csv, index=False)
+        
+        print("\n--- Relatório de Testes de Hipótese ---")
+        print(df_resultados.to_string(index=False))
+        
+        plotar_p_valores(df_resultados, diretorio_analises)
+        print(f"\nRelatório de testes estatísticos salvo em {caminho_csv}")
+
+if __name__ == '__main__':
+    main()
+\end{minted}
+
+\newpage
+
+\section{04\_avaliar\_portfolio.py}
+\textbf{Caminho do arquivo:} \texttt{04\_avaliar\_portfolio.py}
+
+\begin{minted}{python}
+"""
+Script de Avaliação Financeira de Portfólio.
+Calcula métricas financeiras institucionais (ROI, Log-Retorno, Sharpe, Sortino, Calmar e MDD)
+para simular a aplicação das predições do MSR-TCN na gestão de um fundo de investimento.
+"""
+import os
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
+from configuracoes import DIRETORIO_RESULTADOS
+
+DIRETORIO_PORTFOLIO = os.path.join(DIRETORIO_RESULTADOS, 'avaliacao_portfolio')
+
+def configurar_estilo():
+    """Configurações visuais institucionais para os gráficos de desempenho."""
+    plt.style.use('seaborn-v0_8-whitegrid')
+    sns.set_palette("husl")
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['axes.titlesize'] = 16
+    plt.rcParams['axes.labelsize'] = 14
+    plt.rcParams['xtick.labelsize'] = 12
+    plt.rcParams['ytick.labelsize'] = 12
+    plt.rcParams['legend.fontsize'] = 12
+    plt.rcParams['figure.titlesize'] = 20
+
+def calcular_sharpe(curva_patrimonio, dias_trade=252):
+    """Calcula o Índice de Sharpe anualizado assumindo Taxa Livre de Risco = 0"""
+    retornos_diarios = np.diff(curva_patrimonio) / curva_patrimonio[:-1]
+    desvio = np.std(retornos_diarios)
+    if desvio == 0:
+        return 0
+    return (np.mean(retornos_diarios) / desvio) * np.sqrt(dias_trade)
+
+def calcular_mdd(curva_patrimonio):
+    """Calcula o Maximum Drawdown (MDD) absoluto em %."""
+    maximo_acumulado = np.maximum.accumulate(curva_patrimonio)
+    maximo_acumulado[maximo_acumulado == 0] = 1 # Proteção contra div/0
+    quedas = (curva_patrimonio - maximo_acumulado) / maximo_acumulado
+    return np.abs(np.min(quedas)) * 100
+
+def calcular_sortino(curva_patrimonio, dias_trade=252):
+    """Calcula o Índice de Sortino."""
+    retornos_diarios = np.diff(curva_patrimonio) / curva_patrimonio[:-1]
+    retornos_negativos = retornos_diarios[retornos_diarios < 0]
+    
+    desvio_negativo = np.std(retornos_negativos) if len(retornos_negativos) > 0 else 0
+    if desvio_negativo == 0:
+        return 0
+        
+    return (np.mean(retornos_diarios) / desvio_negativo) * np.sqrt(dias_trade)
+
+def calcular_calmar(curva_patrimonio, dias_trade=252):
+    """Calcula o Índice de Calmar: CAGR / MDD."""
+    anos = len(curva_patrimonio) / dias_trade
+    if anos == 0: return 0
+    
+    cagr = ((curva_patrimonio[-1] / curva_patrimonio[0]) ** (1/anos)) - 1
+    mdd = calcular_mdd(curva_patrimonio) / 100.0  
+    
+    if mdd == 0:
+        return 0
+    return cagr / mdd
+
+def simular_retornos(predicoes, retornos_1d, capital_inicial=10000.0, custo_transacao=0.0003):
+    """
+    Simula a curva de capital considerando custos de transação (corretagem/spread).
+    Posição: 2=Comprado(Long), 1=Vendido(Flat/Hold em long-only).
+    """
+    n = len(predicoes)
+    retornos_diarios_estrategia = np.zeros(n)
+    curva_capital = np.zeros(n + 1)
+    curva_capital[0] = capital_inicial
+    
+    posicao = 0.0  
+    
+    predicoes_arr = np.array(predicoes)
+    ret_arr = np.array(retornos_1d) / 100.0
+    
+    for i in range(n):
+        pred = predicoes_arr[i]
+        posicao_anterior = posicao
+        
+        # Estratégia Long-Only: 2 = Comprar, 1 = Vender (Ficar de fora)
+        if pred == 2: posicao = 1.0
+        elif pred == 1: posicao = 0.0
+        
+        custo = custo_transacao if posicao != posicao_anterior else 0.0
+        retorno_diario = (posicao * ret_arr[i]) - custo
+        retornos_diarios_estrategia[i] = retorno_diario
+        curva_capital[i+1] = curva_capital[i] * (1 + retorno_diario)
+        
+    return retornos_diarios_estrategia, curva_capital[1:]
+
+def plotar_crescimento_portfolio(datas, curva_msr, curva_base, curva_bh, nome_segmento, sufixo_titulo=""):
+    fig, ax = plt.subplots(figsize=(14, 7))
+    
+    ax.plot(datas, curva_bh, label='Mercado (Buy & Hold)', color='#B0BEC5', linestyle='--', linewidth=2)
+    ax.plot(datas, curva_base, label='Estratégia TCN Controle', color='#F24236', linewidth=2, alpha=0.8)
+    ax.plot(datas, curva_msr, label='Estratégia MSR-TCN', color='#2E86AB', linewidth=3)
+    
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, pos: f'R$ {x:,.0f}'.replace(',', '.')))
+    ax.set_title(f'Crescimento de Fundo de Investimento: Portfólio {nome_segmento}\n(Capital Inicial R$ 10.000 por Ativo, Ponderação Igualitária){sufixo_titulo}', fontweight='bold', pad=20)
+    ax.set_ylabel('Patrimônio Total do Portfólio', fontweight='bold')
+    ax.set_xlabel('Período de Validação', fontweight='bold')
+    ax.legend(frameon=True, shadow=True, fancybox=True)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(DIRETORIO_PORTFOLIO, f'crescimento_portfolio_{nome_segmento}.png'), dpi=300)
+    plt.close()
+
+def plotar_barras_comparacao(df_metricas, sufixo_metrica, string_titulo, string_ylabel, nome_saida, is_percentagem=True):
+    plt.figure(figsize=(12, 8))
+    
+    colunas_plotar = [f'Buy&Hold_{sufixo_metrica}', f'Baseline_{sufixo_metrica}', f'MSRTCN_{sufixo_metrica}']
+    
+    plot_df = pd.melt(df_metricas, id_vars=['Segmento'], value_vars=colunas_plotar,
+                      var_name='Estratégia', value_name='Valor')
+    
+    plot_df['Estratégia'] = plot_df['Estratégia'].map({
+        f'Buy&Hold_{sufixo_metrica}': 'Buy & Hold',
+        f'Baseline_{sufixo_metrica}': 'TCN Controle',
+        f'MSRTCN_{sufixo_metrica}': 'MSR-TCN'
+    })
+    
+    ax = sns.barplot(x='Segmento', y='Valor', hue='Estratégia', data=plot_df, palette=['#B0BEC5', '#F24236', '#2E86AB'])
+    
+    plt.title(string_titulo, fontweight='bold', pad=20)
+    plt.ylabel(string_ylabel, fontweight='bold')
+    plt.xlabel('Segmento', fontweight='bold')
+    plt.xticks(rotation=45)
+    
+    for p in ax.patches:
+        height = p.get_height()
+        if not np.isnan(height) and height != 0:
+            fmt = f'{height:.0f}%' if is_percentagem else f'{height:.2f}'
+            ax.annotate(fmt, (p.get_x() + p.get_width() / 2., height),
+                        ha='center', va='bottom', fontsize=10, fontweight='bold', xytext=(0, 5),
+                        textcoords='offset points')
+                        
+    plt.legend(title='Estratégia', frameon=True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(DIRETORIO_PORTFOLIO, nome_saida), dpi=300)
+    plt.close()
+
+def main():
+    configurar_estilo()
+    os.makedirs(DIRETORIO_PORTFOLIO, exist_ok=True)
+    print("Gerando Avaliação Financeira Institucional (Log-Retorno, Sharpe, MDD, Sortino, Calmar)...")
+    
+    segmentos_vencedores = ['SmallCaps', 'FIIs', 'MegaCapsTech', 'TradicionaisGlobais', 'CambioGlobal']
+    capital_inicial_por_ativo = 10000.0
+    
+    todas_metricas = []
+    
+    for segmento in segmentos_vencedores:
+        caminho_csv = os.path.join(DIRETORIO_RESULTADOS, f"predicoes_{segmento}_wf.csv")
+        if not os.path.exists(caminho_csv):
+            print(f"  [{segmento}] Arquivo {caminho_csv} não encontrado. Execute o script de treino.")
+            continue
+            
+        print(f"  Analisando portfólio {segmento}...")
+        df = pd.read_csv(caminho_csv)
+        df['Data'] = pd.to_datetime(df['Data'])
+        df = df.sort_values(['Ativo', 'Data']).reset_index(drop=True)
+        
+        ativos = df['Ativo'].unique()
+        datas_portfolio = np.sort(df['Data'].unique())
+        
+        portfolio_msr = np.zeros(len(datas_portfolio))
+        portfolio_base = np.zeros(len(datas_portfolio))
+        portfolio_bh = np.zeros(len(datas_portfolio))
+        
+        portfolio_msr_sem_custo = np.zeros(len(datas_portfolio))
+        portfolio_base_sem_custo = np.zeros(len(datas_portfolio))
+        
+        metricas_ativos = []
+        
+        for ativo in ativos:
+            df_ativo = df[df['Ativo'] == ativo].copy()
+            df_ativo = df_ativo.set_index('Data').reindex(datas_portfolio).fillna({'Ret_1d': 0, 'MSRTCN_Pred': 0, 'BaselineTCN_Pred': 0})
+            
+            retorno_bh = df_ativo['Ret_1d'].values / 100.0
+            curva_bh = capital_inicial_por_ativo * np.cumprod(1 + retorno_bh)
+            
+            _, curva_msr = simular_retornos(df_ativo['MSRTCN_Pred'].values, df_ativo['Ret_1d'].values, capital_inicial_por_ativo, 0.0003)
+            _, curva_base = simular_retornos(df_ativo['BaselineTCN_Pred'].values, df_ativo['Ret_1d'].values, capital_inicial_por_ativo, 0.0003)
+            
+            _, curva_msr_sem_custo = simular_retornos(df_ativo['MSRTCN_Pred'].values, df_ativo['Ret_1d'].values, capital_inicial_por_ativo, 0.0)
+            _, curva_base_sem_custo = simular_retornos(df_ativo['BaselineTCN_Pred'].values, df_ativo['Ret_1d'].values, capital_inicial_por_ativo, 0.0)
+            
+            portfolio_msr += curva_msr
+            portfolio_base += curva_base
+            portfolio_bh += curva_bh
+            portfolio_msr_sem_custo += curva_msr_sem_custo
+            portfolio_base_sem_custo += curva_base_sem_custo
+            
+            metricas_ativos.append({
+                'Segmento': segmento,
+                'Ativo': ativo,
+                'Buy&Hold_ROI(%)': ((curva_bh[-1] - capital_inicial_por_ativo) / capital_inicial_por_ativo) * 100,
+                'Baseline_ROI(%)': ((curva_base[-1] - capital_inicial_por_ativo) / capital_inicial_por_ativo) * 100,
+                'MSRTCN_ROI(%)': ((curva_msr[-1] - capital_inicial_por_ativo) / capital_inicial_por_ativo) * 100,
+                'Buy&Hold_Log': np.log(curva_bh[-1] / capital_inicial_por_ativo),
+                'Baseline_Log': np.log(max(curva_base[-1], 1e-5) / capital_inicial_por_ativo),
+                'MSRTCN_Log': np.log(max(curva_msr[-1], 1e-5) / capital_inicial_por_ativo)
+            })
+            
+        plotar_crescimento_portfolio(datas_portfolio, portfolio_msr, portfolio_base, portfolio_bh, segmento)
+        plotar_crescimento_portfolio(datas_portfolio, portfolio_msr_sem_custo, portfolio_base_sem_custo, portfolio_bh, f"{segmento}_sem_custos", "\n[SEM TAXA DE CORRETAGEM]")
+        
+        df_ativos = pd.DataFrame(metricas_ativos)
+        
+        todas_metricas.append({
+            'Segmento': segmento,
+            'Ativos': len(ativos),
+            'Buy&Hold_ROI_Mean(%)': df_ativos['Buy&Hold_ROI(%)'].mean(),
+            'Baseline_ROI_Mean(%)': df_ativos['Baseline_ROI(%)'].mean(),
+            'MSRTCN_ROI_Mean(%)': df_ativos['MSRTCN_ROI(%)'].mean(),
+            
+            'Buy&Hold_Log_Mean': df_ativos['Buy&Hold_Log'].mean(),
+            'Baseline_Log_Mean': df_ativos['Baseline_Log'].mean(),
+            'MSRTCN_Log_Mean': df_ativos['MSRTCN_Log'].mean(),
+            
+            'Buy&Hold_Sharpe': calcular_sharpe(portfolio_bh),
+            'Baseline_Sharpe': calcular_sharpe(portfolio_base),
+            'MSRTCN_Sharpe': calcular_sharpe(portfolio_msr),
+            
+            'Buy&Hold_Sortino': calcular_sortino(portfolio_bh),
+            'Baseline_Sortino': calcular_sortino(portfolio_base),
+            'MSRTCN_Sortino': calcular_sortino(portfolio_msr),
+            
+            'Buy&Hold_MDD(%)': calcular_mdd(portfolio_bh),
+            'Baseline_MDD(%)': calcular_mdd(portfolio_base),
+            'MSRTCN_MDD(%)': calcular_mdd(portfolio_msr),
+            
+            'Buy&Hold_Calmar': calcular_calmar(portfolio_bh),
+            'Baseline_Calmar': calcular_calmar(portfolio_base),
+            'MSRTCN_Calmar': calcular_calmar(portfolio_msr)
+        })
+        
+        df_ativos.to_csv(os.path.join(DIRETORIO_PORTFOLIO, f'roi_detalhado_{segmento}.csv'), index=False)
+        
+    if not todas_metricas:
+        print("Nenhuma métrica computada. Verifique os arquivos CSV de predição.")
+        return
+
+    df_metricas = pd.DataFrame(todas_metricas)
+    df_metricas.to_csv(os.path.join(DIRETORIO_PORTFOLIO, 'resumo_segmentos_roi.csv'), index=False)
+    
+    # Gerar os gráficos de barra
+    plotar_barras_comparacao(df_metricas, 'ROI_Mean(%)', 'Retorno Total (Média Aritmética) por Segmento', 'ROI Médio (%)', 'comparacao_segmento_roi_media.png', True)
+    plotar_barras_comparacao(df_metricas, 'Log_Mean', 'Log-Retorno Médio (Penalização de Outliers)', 'Média do Log-Retorno', 'comparacao_segmento_roi_log.png', False)
+    plotar_barras_comparacao(df_metricas, 'Sharpe', 'Sharpe Ratio Institucional (Retorno/Volatilidade Total)', 'Sharpe Ratio', 'comparacao_segmento_sharpe.png', False)
+    plotar_barras_comparacao(df_metricas, 'Sortino', 'Sortino Ratio (Retorno / Volatilidade Negativa)', 'Sortino Ratio', 'comparacao_segmento_sortino.png', False)
+    plotar_barras_comparacao(df_metricas, 'Calmar', 'Calmar Ratio (Retorno Anual / MDD)', 'Calmar Ratio', 'comparacao_segmento_calmar.png', False)
+    # MDD plot deve ter formatação de porcentagem
+    plotar_barras_comparacao(df_metricas, 'MDD(%)', 'Maximum Drawdown (Risco de Ruína) - Menor é Melhor', 'MDD (%)', 'comparacao_segmento_mdd.png', True)
+    
+    print(f"\n✅ Relatórios Institucionais de Portfólio concluídos: {DIRETORIO_PORTFOLIO}")
+
+if __name__ == '__main__':
+    main()
+\end{minted}
+
+\newpage
+
+\section{06\_benchmark\_custo\_computacional.py}
+\textbf{Caminho do arquivo:} \texttt{06\_benchmark\_custo\_computacional.py}
+
+\begin{minted}{python}
+"""
+Script de Benchmark de Custo Computacional.
+Compara empiricamente e teoricamente o custo computacional (MACs, Parâmetros e Latência)
+entre a arquitetura proposta MSR-TCN e o baseline TCN de Controle.
+"""
+import os
+import torch
+import time
+import thop
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
+
+from configuracoes import DIRETORIO_RESULTADOS
+from modelos import MSRTCN1D, BaselineTCN1D
+
+def medir_macs_e_parametros(modelo, formato_entrada):
+    """Mede Operações de Multiplicação e Acumulação (MACs) e número de parâmetros."""
+    modelo.eval()
+    modelo.cpu()
+    entrada_falsa = torch.randn(formato_entrada)
+    macs, parametros = thop.profile(modelo, inputs=(entrada_falsa,), verbose=False)
+    return macs, parametros
+
+def medir_tempo_inferencia(modelo_fn, device, formato_entrada, num_execucoes=10000):
+    """Mede a latência empírica e a vazão (throughput) de inferência no hardware atual."""
+    modelo = modelo_fn().to(device)
+    modelo.eval()
+    entrada_falsa = torch.randn(formato_entrada).to(device)
+    
+    # Aquecimento (Warm-up)
+    with torch.no_grad():
+        for _ in range(100):
+            _ = modelo(entrada_falsa)
+            
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+    elif device.type == 'mps':
+        torch.mps.synchronize()
+        
+    tempo_inicio = time.perf_counter()
+    with torch.no_grad():
+        for _ in range(num_execucoes):
+            _ = modelo(entrada_falsa)
+            
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+    elif device.type == 'mps':
+        torch.mps.synchronize()
+        
+    tempo_fim = time.perf_counter()
+    
+    tempo_medio_ms = ((tempo_fim - tempo_inicio) / num_execucoes) * 1000
+    tamanho_lote = formato_entrada[0]
+    vazao = tamanho_lote / (tempo_medio_ms / 1000)
+    return tempo_medio_ms, vazao
+
+def main():
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    print(f"Iniciando Benchmark de Eficiência Computacional (Dispositivo: {device})")
+    formato_entrada = (128, 6, 32)
+    
+    # 1. Complexidade Teórica
+    macs_base, params_base = medir_macs_e_parametros(BaselineTCN1D(in_channels=6, seq_len=32), formato_entrada)
+    macs_msr, params_msr = medir_macs_e_parametros(MSRTCN1D(in_channels=6, seq_len=32), formato_entrada)
+    
+    # 2. Latência Empírica
+    tempo_base, vazao_base = medir_tempo_inferencia(lambda: BaselineTCN1D(in_channels=6, seq_len=32), device, formato_entrada, num_execucoes=5000)
+    tempo_msr, vazao_msr = medir_tempo_inferencia(lambda: MSRTCN1D(in_channels=6, seq_len=32), device, formato_entrada, num_execucoes=5000)
+    
+    relatorio = f"""====================================================
+RELATÓRIO DE BENCHMARK COMPUTACIONAL
+====================================================
+
+1. Complexidade Teórica (Independente de Hardware)
+----------------------------------------------------
+[TCN Controle] Parâmetros: {params_base:,.0f} | MACs: {macs_base:,.0f}
+[MSR-TCN]      Parâmetros: {params_msr:,.0f} | MACs: {macs_msr:,.0f}
+
+> Redução de Parâmetros: {(1 - params_msr/params_base)*100:.2f}%
+> Redução de MACs:       {(1 - macs_msr/macs_base)*100:.2f}%
+
+2. Latência Empírica (Teste de Stress, Lote=128)
+----------------------------------------------------
+Dispositivo de Execução: {device.type.upper()}
+
+[TCN Controle] Tempo de Inferência: {tempo_base:.3f} ms | Vazão: {vazao_base:,.0f} sequências/seg
+[MSR-TCN]      Tempo de Inferência: {tempo_msr:.3f} ms | Vazão: {vazao_msr:,.0f} sequências/seg
+
+> Melhoria de Velocidade: {(tempo_base/tempo_msr - 1)*100:.2f}% mais rápido
+====================================================
+"""
+    print(relatorio)
+    
+    os.makedirs(DIRETORIO_RESULTADOS, exist_ok=True)
+    caminho_salvar = os.path.join(DIRETORIO_RESULTADOS, 'relatorio_benchmark_computacional.txt')
+    with open(caminho_salvar, 'w') as f:
+        f.write(relatorio)
+        
+    print(f"✅ Relatório de Benchmark salvo em: {caminho_salvar}")
+
+if __name__ == "__main__":
+    main()
+\end{minted}
+
+\newpage
+
+\section{05\_gerar\_visualizacoes.py}
+\textbf{Caminho do arquivo:} \texttt{05\_gerar\_visualizacoes.py}
+
+\begin{minted}{python}
+"""
+Script de Geração de Visualizações (Data Storytelling).
+Produz gráficos de alta qualidade para explicar os resultados do modelo MSR-TCN,
+incluindo Matrizes de Confusão, Boxplots de retornos diários por predição, 
+e as curvas de crescimento de capital acumulado.
+"""
+import os
+import glob
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'src')))
+from configuracoes import DIRETORIO_RESULTADOS
+
+DIRETORIO_STORYTELLING = os.path.join(DIRETORIO_RESULTADOS, 'data_storytelling')
+
+def configurar_estilo_storytelling():
+    plt.style.use('seaborn-v0_8-white')
+    sns.set_palette("husl")
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = ['Inter', 'Roboto', 'Arial']
+
+def plotar_matriz_confusao(alvos, predicoes, nome_segmento, caminho_salvar):
+    cm = confusion_matrix(alvos, predicoes, labels=[0, 1, 2])
+    # Calcula proporção por linha (Rótulo Real)
+    soma = cm.sum(axis=1, keepdims=True)
+    soma[soma == 0] = 1 # Evita divisão por zero
+    cm_pct = cm.astype('float') / soma * 100
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(cm_pct, annot=True, fmt='.1f', cmap='Blues', 
+                xticklabels=['MANTER (0)', 'VENDER (1)', 'COMPRAR (2)'], 
+                yticklabels=['MANTER (0)', 'VENDER (1)', 'COMPRAR (2)'],
+                cbar_kws={'label': 'Proporção (%)'},
+                annot_kws={'size': 14, 'weight': 'bold'}, ax=ax)
+                
+    ax.set_xlabel('Previsão do MSR-TCN', fontweight='bold')
+    ax.set_ylabel('Rótulo Real (Tendência)', fontweight='bold')
+    ax.set_title(f'Matriz de Confusão MSR-TCN: {nome_segmento}', fontsize=16, fontweight='bold', pad=20)
+    plt.tight_layout()
+    plt.savefig(caminho_salvar, dpi=300)
+    plt.close()
+
+def plotar_boxplots_predicao(df, nome_segmento, diretorio_saida):
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Mapear cores: HOLD (Cinza), SELL (Vermelho), BUY (Verde)
+    sns.boxplot(x='MSRTCN_Pred', y='Ret_1d', data=df, 
+                   palette=['#9E9E9E', '#D32F2F', '#388E3C'], ax=ax)
+    
+    ax.set_xticklabels(['MANTER (0)', 'VENDER (1)', 'COMPRAR (2)'])
+    ax.axhline(0, color='#333333', linestyle='--', linewidth=1.5)
+    ax.set_title(f'Retornos Diários Reais por Predição: {nome_segmento}', fontsize=16, fontweight='bold', pad=20)
+    ax.set_ylabel('Retorno Real de 1 Dia (%)', fontweight='bold')
+    ax.set_xlabel('Decisão Algorítmica do MSR-TCN', fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(diretorio_saida, f'boxplots_retornos_{nome_segmento}.png'), dpi=300)
+    plt.close()
+
+def plotar_retornos_acumulados_storytelling(ticker, nome_segmento, df_ticker, diretorio_saida):
+    def calcular_retornos_estrategia(predicoes, retornos_1d):
+        n = len(predicoes)
+        retornos_est = np.zeros(n)
+        posicao = 0.0  
+        
+        predicoes_arr = np.array(predicoes)
+        ret_arr = np.array(retornos_1d)
+        
+        for i in range(n):
+            if predicoes_arr[i] == 2: # COMPRAR
+                posicao = 1.0
+            elif predicoes_arr[i] == 1: # VENDER
+                posicao = 0.0
+            
+            retornos_est[i] = posicao * (ret_arr[i] / 100.0)
+            
+        return np.cumprod(1 + retornos_est)
+
+    df_ticker = df_ticker.sort_values('Data').reset_index(drop=True)
+    datas = pd.to_datetime(df_ticker['Data'])
+    
+    retornos_bnh = np.cumprod(1 + (df_ticker['Ret_1d'].values / 100.0))
+    est_msr = calcular_retornos_estrategia(df_ticker['MSRTCN_Pred'].values, df_ticker['Ret_1d'].values)
+    est_base = calcular_retornos_estrategia(df_ticker['BaselineTCN_Pred'].values, df_ticker['Ret_1d'].values)
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    ax.plot(datas, retornos_bnh, label='Mercado (Buy & Hold)', color='#B0BEC5', linestyle='--', linewidth=2)
+    ax.plot(datas, est_base, label='Estratégia TCN Controle', color='#F24236', linewidth=2, alpha=0.8)
+    ax.plot(datas, est_msr, label='Estratégia MSR-TCN', color='#2E86AB', linewidth=3)
+    
+    ax.set_title(f'Crescimento de Capital: {ticker} (Segmento {nome_segmento})', fontsize=18, fontweight='bold', pad=20)
+    ax.set_ylabel('Multiplicador do Capital (1.0 = Inicial)', fontweight='bold')
+    ax.legend(frameon=False, fontsize=12)
+    
+    idx_max = np.argmax(est_msr)
+    ax.annotate(f'Pico MSR-TCN: {est_msr[idx_max]:.2f}x', 
+                xy=(datas.iloc[idx_max], est_msr[idx_max]),
+                xytext=(datas.iloc[idx_max], est_msr[idx_max] * 1.1),
+                arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=5),
+                fontsize=10, fontweight='bold')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(diretorio_saida, f'evolucao_capital_{ticker}.png'), dpi=300)
+    plt.close()
+
+def main():
+    configurar_estilo_storytelling()
+    os.makedirs(DIRETORIO_STORYTELLING, exist_ok=True)
+    print("Gerando Data Storytelling (Segmentos Vencedores)...")
+
+    segmentos_vencedores = ['SmallCaps', 'FIIs', 'MegaCapsTech', 'TradicionaisGlobais', 'CambioGlobal']
+    
+    for segmento in segmentos_vencedores:
+        caminho_csv = os.path.join(DIRETORIO_RESULTADOS, f"predicoes_{segmento}_wf.csv")
+        if not os.path.exists(caminho_csv):
+            print(f"  ⚠ CSV não encontrado para {segmento}. Aguardando treinamento.")
+            continue
+            
+        print(f"Processando Segmento: {segmento}...")
+        df = pd.read_csv(caminho_csv)
+        
+        plotar_matriz_confusao(df['Alvo'].values, df['MSRTCN_Pred'].values, segmento, os.path.join(DIRETORIO_STORYTELLING, f"matriz_confusao_{segmento}.png"))
+        plotar_boxplots_predicao(df, segmento, DIRETORIO_STORYTELLING)
+        
+        # Seleciona 1 ativo representativo para contar a história
+        ativos = df['Ativo'].unique()
+        if len(ativos) > 0:
+            representativo = ativos[0]
+            if segmento == 'SmallCaps' and 'YDUQ3.SA' in ativos: representativo = 'YDUQ3.SA'
+            if segmento == 'FIIs' and 'MXRF11.SA' in ativos: representativo = 'MXRF11.SA'
+            if segmento == 'MegaCapsTech' and 'AAPL' in ativos: representativo = 'AAPL'
+            if segmento == 'TradicionaisGlobais' and 'JNJ' in ativos: representativo = 'JNJ'
+            if segmento == 'CambioGlobal' and 'EURUSD=X' in ativos: representativo = 'EURUSD=X'
+            
+            df_ativo = df[df['Ativo'] == representativo].copy()
+            plotar_retornos_acumulados_storytelling(representativo, segmento, df_ativo, DIRETORIO_STORYTELLING)
+
+    print(f"\n✅ Relatório de Visualizações (Data Storytelling) concluído com sucesso!")
+    print(f"Confira a pasta: {DIRETORIO_STORYTELLING}")
+
+if __name__ == '__main__':
+    main()
+\end{minted}
+
+\newpage
+
+
+\end{document}
